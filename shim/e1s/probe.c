@@ -10,6 +10,11 @@
 #define GICD_BASE        0x08000000UL
 #define GICR_BASE        0x080A0000UL
 #define UART_BASE        0x09000000UL
+#define PCI_ECAM_BASE    0x4010000000UL
+#define PCI_MMIO_BASE    0x10000000UL
+#define UFS_UTRL_BASE    0x50300000UL
+#define UFS_CMD_BASE     0x50400000UL
+#define UFS_DATA_BASE    0x50500000UL
 #else
 #define FB_BASE          0xFA200000UL
 #define FB_WIDTH         1080U
@@ -35,6 +40,9 @@
 extern char _head[];
 extern char _end[];
 void halt(void) __attribute__((noreturn));
+static void out(const char *s);
+static void hex(uint64_t v);
+static inline uint32_t be32(const uint8_t *p);
 
 static int screen_ready;
 static int log_ready;
@@ -74,12 +82,178 @@ static void uart_putc(char c)
 
 static void qemu_exit(int code)
 {
+	volatile uint64_t block[2] = { 0x20026U, (uint64_t)(unsigned)code };
 	register uintptr_t x0 __asm__("x0") = 0x18;
-	register uintptr_t x1 __asm__("x1") = (uintptr_t)code;
+	register uintptr_t x1 __asm__("x1") = (uintptr_t)block;
 
 	__asm__ volatile("hlt #0xf000" : "+r"(x0) : "r"(x1) : "memory");
 	for (;;)
 		__asm__ volatile("wfe");
+}
+
+static uintptr_t pci_cfg(uint32_t dev, uint32_t fn, uint32_t reg)
+{
+	return PCI_ECAM_BASE + (dev << 15) + (fn << 12) + reg;
+}
+
+static uintptr_t pci_ufs_probe(void)
+{
+	for (uint32_t dev = 0; dev < 32; dev++) {
+		uint32_t id = rd32(pci_cfg(dev, 0, 0));
+		uintptr_t cfg;
+		uint32_t bar;
+		uint32_t mask;
+		uint32_t size;
+		uintptr_t base;
+		uint32_t cmd;
+
+		if (id != 0x00131B36U)
+			continue;
+		cfg = pci_cfg(dev, 0, 0);
+		bar = rd32(cfg + 0x10);
+		if (bar & 1U)
+			continue;
+		if (bar & 4U)
+			continue;
+		wr32(cfg + 0x10, 0xFFFFFFFFU);
+		mask = rd32(cfg + 0x10) & ~0xFU;
+		size = ~mask + 1U;
+		if (size < 0x1000U)
+			size = 0x1000U;
+		base = (PCI_MMIO_BASE + size - 1U) & ~((uintptr_t)size - 1U);
+		wr32(cfg + 0x10, (uint32_t)base);
+		cmd = rd32(cfg + 0x04);
+		wr32(cfg + 0x04, cmd | 0x6U);
+		return base;
+	}
+	return 0;
+}
+
+static void zero_bytes(uintptr_t addr, uint32_t len)
+{
+	for (uint32_t i = 0; i < len; i++)
+		*(volatile uint8_t *)(addr + i) = 0;
+}
+
+static int wait_bits(uintptr_t base, uint32_t reg, uint32_t mask,
+		     uint32_t want, uint32_t tries)
+{
+	for (uint32_t i = 0; i < tries; i++) {
+		if ((rd32(base + reg) & mask) == want)
+			return 0;
+	}
+	return -1;
+}
+
+static int ufs_qemu_setup(uintptr_t base)
+{
+	const uintptr_t utrl = UFS_UTRL_BASE;
+
+	wr32(base + 0x34, 1);
+	if (wait_bits(base, 0x34, 1, 1, 10000000)) {
+		out("UFS_READ_FAIL hce\n");
+		return -1;
+	}
+	wr32(base + 0x24, 0x470);
+	if (wait_bits(base, 0x30, 0x8, 0x8, 10000000)) {
+		out("UFS_READ_FAIL ready\n");
+		return -1;
+	}
+
+	wr32(base + 0x94, 0);
+	wr32(base + 0x98, 0);
+	wr32(base + 0x9c, 0);
+	wr32(base + 0x90, 0x16);
+	if (wait_bits(base, 0x20, 0x400, 0x400, 10000000)) {
+		out("UFS_READ_FAIL uic\n");
+		return -1;
+	}
+	wr32(base + 0x20, 0x400);
+	if (rd32(base + 0x98)) {
+		out("UFS_READ_FAIL uicarg\n");
+		return -1;
+	}
+	if (wait_bits(base, 0x30, 0xb, 0xb, 10000000)) {
+		out("UFS_READ_FAIL link\n");
+		return -1;
+	}
+
+	wr32(base + 0x24, 0x471);
+	wr32(base + 0x4c, 0);
+	wr32(base + 0x50, (uint32_t)utrl);
+	wr32(base + 0x54, 0);
+	wr32(base + 0x60, 1);
+	return 0;
+}
+
+static int ufs_qemu_cmd(uintptr_t base, const char *tag, const uint8_t *cdb,
+			uint32_t len, uint32_t flags)
+{
+	const uintptr_t cmd = UFS_CMD_BASE;
+	const uintptr_t utrl = UFS_UTRL_BASE;
+	const uintptr_t data = UFS_DATA_BASE;
+	uint8_t *rsp = (uint8_t *)(cmd + 1024);
+	uint32_t ocs;
+
+	zero_bytes(utrl, 32);
+	zero_bytes(cmd, 4096);
+	zero_bytes(data, len ? len : 1);
+
+	((volatile uint8_t *)cmd)[0] = 0x01;
+	((volatile uint8_t *)cmd)[1] = (uint8_t)flags;
+	((volatile uint8_t *)cmd)[12] = (uint8_t)(len >> 24);
+	((volatile uint8_t *)cmd)[13] = (uint8_t)(len >> 16);
+	((volatile uint8_t *)cmd)[14] = (uint8_t)(len >> 8);
+	((volatile uint8_t *)cmd)[15] = (uint8_t)len;
+	for (uint32_t i = 0; i < 16; i++)
+		((volatile uint8_t *)cmd)[16 + i] = cdb[i];
+
+	wr32(cmd + 2048, (uint32_t)data);
+	wr32(cmd + 2052, 0);
+	wr32(cmd + 2056, 0);
+	wr32(cmd + 2060, len ? len - 1 : 0);
+
+	wr32(utrl + 0, 0x15000000);
+	wr32(utrl + 4, 0);
+	wr32(utrl + 8, 0x0f);
+	wr32(utrl + 12, 0);
+	wr32(utrl + 16, (uint32_t)cmd);
+	wr32(utrl + 20, 0);
+	wr32(utrl + 24, 288 | (256U << 16));
+	wr32(utrl + 28, (len ? 1U : 0U) | (512U << 16));
+	__asm__ volatile("dsb sy" ::: "memory");
+
+	wr32(base + 0x58, 1);
+	if (wait_bits(base, 0x20, 1, 1, 10000000)) {
+		out(tag);
+		out("_FAIL doorbell\n");
+		return -1;
+	}
+	wr32(base + 0x20, 1);
+
+	ocs = rd32(utrl + 8) & 0xff;
+	out(tag);
+	out(" ocs=");
+	hex(ocs);
+	out(" rsp=");
+	hex(rsp[6]);
+	out(" status=");
+	hex(rsp[7]);
+	out(" data=");
+	hex(be32((const uint8_t *)data));
+	out("\n");
+	return 0;
+}
+
+static int ufs_qemu_read(uintptr_t base)
+{
+	static const uint8_t sense_cdb[16] = { 0x03, 0, 0, 0, 18 };
+	static const uint8_t read_cdb[16] = { 0x28, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
+
+	if (ufs_qemu_setup(base))
+		return -1;
+	ufs_qemu_cmd(base, "UFS_SENSE", sense_cdb, 18, 0x40);
+	return ufs_qemu_cmd(base, "UFS_READ", read_cdb, 4096, 0x40);
 }
 #endif
 
@@ -466,15 +640,26 @@ static void gic_dump(void)
 	out("\n");
 }
 
-#ifndef PROBE_QEMU
 static void ufs_dump(void)
 {
-	kv("UFS_CAP", rd32(UFS_HCI_BASE + 0x00));
-	kv("UFS_VER", rd32(UFS_HCI_BASE + 0x08));
-	kv("UFS_HCS", rd32(UFS_HCI_BASE + 0x30));
-	out("\n");
-}
+	uintptr_t base = UFS_HCI_BASE;
+
+#ifdef PROBE_QEMU
+	base = pci_ufs_probe();
+	if (!base) {
+		out("QEMU UFS not found\n");
+		return;
+	}
+	kv("UFS_BAR", base);
 #endif
+	kv("UFS_CAP", rd32(base + 0x00));
+	kv("UFS_VER", rd32(base + 0x08));
+	kv("UFS_HCS", rd32(base + 0x30));
+	out("\n");
+#ifdef PROBE_QEMU
+	ufs_qemu_read(base);
+#endif
+}
 
 void probe_exception(uint64_t slot)
 {
@@ -552,11 +737,7 @@ void probe_main(uintptr_t dtb)
 	out("\nGIC\n");
 	gic_dump();
 	out("\nUFS\n");
-#ifdef PROBE_QEMU
-	out("QEMU virt has no e1s UFS; skipped\n");
-#else
 	ufs_dump();
-#endif
 	out("\nPROBE DONE\n");
 	log_finish();
 #ifdef PROBE_QEMU

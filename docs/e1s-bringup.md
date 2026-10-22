@@ -255,10 +255,16 @@ entry, linker, FDT, and exception-path mistakes without touching the phone.
 ```powershell
 .\shim\e1s\build.cmd -Zig C:\path\to\zig.exe -Qemu
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\e1s\run_qemu.ps1
+python tools\e1s\test_qemu.py
 ```
 
 The script uses `qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a72
--m 512 -nographic` and exits through ARM semihosting. A good run ends with:
+-m 512 -nographic` and exits through ARM semihosting. It attaches QEMU's PCI
+UFS device (`1b36:0013`) with a 1 MiB LUN. The probe finds it through ECAM at
+`0x4010000000`, assigns BAR0 at `0x10000000`, and reads the UFS HCI registers.
+It then enables the controller, starts the UIC link, issues REQUEST SENSE to
+clear the startup unit attention, and reads block 0 with READ(10). The test
+disk starts with `E1S-UFS!`. A good run ends with:
 
 ```text
 E1S PROBE v1
@@ -266,12 +272,18 @@ QEMU virt smoke test (not S24 hardware)
 ...
   mem 0x0 0x40000000 0x0 0x20000000
 ...
+UFS_BAR=0x10000000 UFS_CAP=0x107021f UFS_VER=0x410 UFS_HCS=0x0
+UFS_SENSE ocs=0x0 rsp=0x1 status=0x2 data=0x0
+UFS_READ ocs=0x0 rsp=0x0 status=0x0 data=0x4531532d
+...
 PROBE DONE
 QEMU EXIT
 ```
 
-It is a code smoke test, not a boot test. It does not exercise S-Boot, the
-`0xFA200000` framebuffer, UFS, or any other Samsung hardware.
+`tools/e1s/test_qemu.py` checks those markers and fails on an exception, a
+missing UFS signature, or a nonzero QEMU exit. This is a code smoke test, not a
+boot test. It does not exercise S-Boot, the `0xFA200000` framebuffer, the
+Exynos UFS controller/PHY, or any other Samsung hardware.
 
 ## 4. Recovery and test procedure
 

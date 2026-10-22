@@ -78,13 +78,28 @@ QEMU smoke test:
   `shim/e1s/out-qemu/` with `-DPROBE_QEMU=1`.
 - `tools/e1s/run_qemu.ps1` runs it on `qemu-system-aarch64 -M virt` with
   GICv3, a fake framebuffer, PL011 UART, and semihosting exit.
+- The runner attaches QEMU's PCI UFSHCI model (`1b36:0013`) with a 1 MiB LUN.
+  The probe scans ECAM at `0x4010000000`, assigns BAR0 at `0x10000000`, and
+  reads `UFS_CAP=0x107021f`, `UFS_VER=0x410`, `UFS_HCS=0x0`.
+- The probe enables the UFS controller, starts the UIC link, clears the initial
+  unit attention with REQUEST SENSE, then submits READ(10) through the UTRL
+  doorbell. The test disk begins with `E1S-UFS!`.
+- Observed UFS output:
+  `UFS_SENSE ocs=0x0 rsp=0x1 status=0x2 data=0x0` followed by
+  `UFS_READ ocs=0x0 rsp=0x0 status=0x0 data=0x4531532d`.
+- The QEMU image is 100,112 bytes, SHA-256
+  `72d5e47ff37b1ff894e4a6beaa0d42a61ca903e08517d4c3e757e9a5f889b0f9`.
+  This is a separate, non-flashable test build.
+- `tools/e1s/test_qemu.py` checks the output markers and fails on an exception,
+  a missing UFS signature, or nonzero QEMU exit. It passes.
 - Observed output reached `PROBE DONE`, printed `CNTFRQ=0x3b9aca0`, read the
   QEMU GIC IDs, and exited with code 0.
 - This test found a real FDT parser bug: node names were padded with
   `(n + 3) & ~3` instead of `(n + 4) & ~3`, so the empty root node name made
   the parser stop after the root. Fixed in `probe.c`.
 - The QEMU image is not flashable and does not prove S-Boot acceptance, S24
-  framebuffer access, UFS, or any other device behavior.
+  framebuffer access, the Exynos UFS controller/PHY, or any other device
+  behavior.
 
 Added:
 

@@ -43,6 +43,8 @@ ports unless the probe confirms them on this phone.
 - [x] Wrote a boot image packer, an image padding tool, and a log reader.
 - [x] Built the probe with Zig 0.16.0 and checked the output by hand.
 - [x] Added a QEMU `virt` smoke test for the payload.
+- [x] Added a UFS READ(10) path to the QEMU probe and checked the first block
+      against a known signature.
 - [x] Checked that the installed TWRP matches the official `e1s` build.
 - [x] Recorded the firmware, CSC, bootloader revision, and root status.
 - [x] Made a 64 MiB stock BOOT backup and a BOOT-only restore tar.
@@ -137,12 +139,20 @@ For the QEMU smoke test:
 ```powershell
 .\shim\e1s\build.cmd -Zig C:\path\to\zig.exe -Qemu
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\e1s\run_qemu.ps1
+python tools\e1s\test_qemu.py
 ```
 
 The QEMU build goes to `shim/e1s/out-qemu/` and uses a fake framebuffer, the
-QEMU PL011 UART, and the `virt` machine's GICv3. It checks that the image
-header, entry code, FDT parser, console, and exception path work. It does not
-test S-Boot, the S24 framebuffer, UFS, or any Samsung hardware.
+QEMU PL011 UART, and the `virt` machine's GICv3. The runner also attaches
+QEMU's UFSHCI model and a 1 MiB LUN, so the probe has to enumerate the PCI
+device, assign BAR0, read `UFS_CAP`/`UFS_VER`/`UFS_HCS`, then submit a SCSI
+REQUEST SENSE and READ(10). The test disk starts with `E1S-UFS!`, and the
+probe prints those first four bytes as `0x4531532d`.
+
+The test checks the image header, entry code, FDT parser, console, GICv3
+registers, PCI/UFS register path, UFS command/data path, and exception output.
+It does not test S-Boot, the S24 framebuffer, the Exynos UFS controller/PHY, or
+any other Samsung hardware.
 
 The runner needs `qemu-system-aarch64`. On Windows it also checks the default
 `C:\Program Files\qemu` install path.

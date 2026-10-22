@@ -36,7 +36,22 @@ if (-not $qemuPath) {
     throw "qemu-system-aarch64 not found; install QEMU or pass -Qemu C:\path\qemu-system-aarch64.exe"
 }
 
+$ufsDisk = Join-Path $root "shim/e1s/out-qemu/ufs.img"
+if (-not (Test-Path -LiteralPath $ufsDisk)) {
+    $fs = [System.IO.File]::Create($ufsDisk)
+    $fs.SetLength(1MB)
+    $fs.Close()
+}
+$signature = [System.Text.Encoding]::ASCII.GetBytes("E1S-UFS!")
+$fs = [System.IO.File]::Open($ufsDisk, "Open", "ReadWrite")
+$fs.Position = 0
+$fs.Write($signature, 0, $signature.Length)
+$fs.Close()
+
 & $qemuPath -M virt,gic-version=3 -cpu cortex-a72 -m 512 `
     -nographic -semihosting-config enable=on,target=native `
+    -device ufs `
+    -drive "if=none,id=ufsdisk,file=$ufsDisk,format=raw" `
+    -device ufs-lu,drive=ufsdisk,lun=0 `
     -kernel $image
 exit $LASTEXITCODE
