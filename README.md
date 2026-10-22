@@ -167,6 +167,10 @@ Windows with Zig:
 
 ## Testing
 
+Publishing this repository does not require a device test. The probe is
+currently untested; the procedure below is for owners or community testers who
+choose to run it.
+
 The first test is BOOT-only. It does not install iOS, does not touch USERDATA,
 and does not format anything.
 
