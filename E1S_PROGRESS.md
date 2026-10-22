@@ -43,13 +43,13 @@ Boot image findings:
   partition, and appends `SEANDROIDENFORCE`.
 - `BOOT_OS_VERSION=14.0.0`, `BOOT_OS_PATCH_LEVEL=2026-07` in the reference
   packaging.
-- Public TWRP for SM-S921B is `twrp-3.7.1_12-0-e1s.img.tar` from
-  `https://build.twrp.me/twrp-3.7.1_12-0-e1s.img.tar`; XDA thread:
+- Official TWRP device page: `https://twrp.me/samsung/samsung_galaxy_e1s.html`.
+  The public SM-S921B build is `twrp-3.7.1_12-0-e1s.img.tar`; XDA thread:
   `https://xdaforums.com/t/recovery-unofficial-twrp-for-galaxy-s24-5g-exynos.4753159/`.
-  It is unofficial and some users report random reboots or no internal
-  storage/OTG, so the exact installed version and behavior must be recorded.
-  Installing it may require vbmeta disable and formatting data; do not format
-  data for the probe if TWRP is already installed.
+  Some users report random reboots or no internal storage/OTG, so the exact
+  installed version and behavior must be recorded. Installing it may require
+  vbmeta disable and formatting data; do not format data for the probe if
+  TWRP is already installed.
 
 Probe build:
 
@@ -111,6 +111,8 @@ Read-only checks on the phone:
 - CSC: `KSA`
 - Android 15, bootloader bit 9 (meets Mu-Silicium's BIT-9 gate)
 - Magisk root available: `su -c id` returns `uid=0(root)`.
+- User reports the installed TWRP version matches the official e1s build on
+  `https://twrp.me/samsung/samsung_galaxy_e1s.html`.
 
 Stock BOOT backup:
 
