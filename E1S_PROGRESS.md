@@ -69,8 +69,8 @@ Probe build:
   `db148e3c0eb8afc28a97cb2f8a12953e50df58c0065d6890efa4a053e2a433ef`.
 - Header checks pass: version 4, header size 1584, ramdisk size 0, kernel at
   offset 4096, footer present, tar contains only `boot.img`.
-- Image header keeps `text_offset=0x80000` like the S8 donor and stock Samsung
-  kernels; the payload itself is PC-relative and works at any load address.
+- Image header keeps `text_offset=0x80000` like stock Samsung kernels; the
+  payload itself is PC-relative and works at any load address.
 
 Added:
 
@@ -84,7 +84,7 @@ Added:
 
 Pre-flash verification:
 
-- The S8 feature list is not an e1s checklist. No XNU patch, loader, UFS,
+- The old feature list is not an e1s checklist. No XNU patch, loader, UFS,
   touch, RTC, HID, display-controller, or userland code exists yet.
 - The probe can prove only BOOT acceptance, entry state, framebuffer access,
   GIC/UFS ID reads, and RAM-log writes.

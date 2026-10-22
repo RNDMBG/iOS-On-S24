@@ -6,8 +6,8 @@
   it.
 - The first target is SM-S921B / `e1s` / Exynos 2400 only. Do not apply
   Snapdragon S24, S24+, or S24 Ultra addresses.
-- Do not reuse S8 addresses or drivers without measurement. The S8 is a donor
-  reference, not an e1s hardware specification.
+- Do not reuse addresses or drivers from older Exynos ports without measuring
+  them on this phone. They are references, not e1s hardware facts.
 - Preserve bootloaders, EFS, persist, modem, and the GPT. Do not flash or erase
   USERDATA during probe work.
 - Before a destructive step, confirm the exact partition and require a current

@@ -6,26 +6,26 @@ This document separates facts taken from source code or published projects
 from things that still need a measurement on the phone. The probe exists to
 replace assumptions with device evidence.
 
-## 0. Status against the donor checklist
+## 0. Status against the old checklist
 
-The Galaxy S8 feature list is not an e1s acceptance checklist. The only code
-in this repository is the probe; no XNU patch or hardware driver has been
-written for e1s yet.
+The old feature list is not an e1s acceptance checklist. The only code in this
+repository is the probe; no XNU patch or hardware driver has been written for
+e1s yet.
 
-| Item | S8 donor assumption | S24 e1s reality | Current e1s code |
+| Item | Older port assumption | S24 e1s reality | Current e1s code |
 | --- | --- | --- | --- |
 | CPU | 4x Cortex-A53 | 10-core ARMv9 (X4 + A720 + A520) | none; probe prints `MPIDR` |
 | Interrupts | GIC-400 | GICv3, GICD/GICR | reads IDs only; no init |
 | Timer | 26 MHz | 25.6 MHz | prints `CNTFRQ_EL0`; no init |
 | Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB only |
 | Touch | S6SY761 | STM SPI9 | none |
-| Storage | S8 UFS | S5E9945 UFS | reads HCI IDs only |
+| Storage | older UFS | S5E9945 UFS | reads HCI IDs only |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
 | Buttons | Bixby key | no Bixby; volume-up only | none |
-| USB | donor USB | e1s USB | none |
+| USB | older USB | e1s USB | none |
 | Graphics | software | software only planned | none |
-| XNU | patched donor | not patched | none |
-| iOS userland/UI | donor userland | not present | none |
+| XNU | older patched tree | not patched | none |
+| iOS userland/UI | older userland | not present | none |
 
 If the probe runs, it proves only that S-Boot accepted the BOOT image, the
 payload executed at the expected exception level, the framebuffer address was
@@ -125,7 +125,7 @@ timer {
 };
 ```
 
-The architectural timer is **25.6 MHz**. Do not reuse the S8's 26 MHz
+The architectural timer is **25.6 MHz**. Do not reuse the older port's 26 MHz
 constant.
 
 ### GIC
@@ -168,8 +168,9 @@ The board supplies:
 };
 ```
 
-The UFS host is much newer than the S8's. Mu-Silicium does not have working
-S5E9945 UFS, and the S8 XNU driver cannot be assumed to work.
+The UFS host is much newer than the one in older Exynos phones. Mu-Silicium
+does not have working S5E9945 UFS, and an older XNU driver cannot be assumed to
+work.
 
 ### Display
 
@@ -207,12 +208,12 @@ module, or a small physical-memory reader.
 The board DTS does not contain a `memory` node; Samsung's bootloader injects
 it. The reserved-memory nodes use high addresses such as `0x8_80000000` and
 `0x8_C0000000`, so at least one DRAM bank is above 32 GiB physical. The probe
-will print the `/memory` nodes from the live DTB. Do **not** hardcode the S8's
-`0x880000000`/512 MiB window for XNU until this is measured.
+will print the `/memory` nodes from the live DTB. Do **not** hardcode the older
+port's `0x880000000`/512 MiB window for XNU until this is measured.
 
 ### Bootloader entry
 
-Not yet measured on e1s. The S8 evidence is only a reference:
+Not yet measured on e1s. The older port's evidence is only a reference:
 
 - S-Boot enters the BOOT kernel at EL1, MMU off
 - `x0` points to the DTB
@@ -286,7 +287,7 @@ The first success criterion is not "iOS boots"; it is:
 5. **Userland**: launchd/SpringBoard with an iPhone identity.
 6. **Devices**: display, touch, keys, RTC, battery, then radios.
 
-Milestones 3-6 are research projects, not a straight port. The S8 code is a
+Milestones 3-6 are research projects, not a straight port. The older code is a
 reference, not a drop-in.
 
 ## 6. Open questions
