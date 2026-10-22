@@ -1,0 +1,11 @@
+out/
+shim/e1s/out/
+*.img
+*.img.tar
+*.bin
+*.elf
+*.o
+*.map
+.venv/
+ziglang/
+__pycache__/
