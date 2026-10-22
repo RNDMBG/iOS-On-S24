@@ -11,6 +11,11 @@ cflags="-O2 -g0 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic"
 cflags="$cflags -fno-zero-initialized-in-bss -mstrict-align -mgeneral-regs-only"
 cflags="$cflags -Wall -Wextra -Werror"
 
+if [ "${QEMU:-0}" = "1" ]; then
+	cflags="$cflags -DPROBE_QEMU=1"
+	out="$here/out-qemu"
+fi
+
 mkdir -p "$out"
 $cc $cflags -c "$here/probe.c" -o "$out/probe.o"
 $cc -g0 -ffreestanding -fno-pic -c "$here/start.S" -o "$out/start.o"

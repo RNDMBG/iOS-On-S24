@@ -62,15 +62,29 @@ Probe build:
   `SEANDROIDENFORCE`, and a one-file Odin tar.
 - Zig 0.16.0 build succeeds.
 - Generated `Image`: 96,832 bytes, SHA-256
-  `57e97b962246863fc7cf0eeb7b60da7e503ef41f6f973c128ab3916d1865b3ff`.
+  `3d4d91b314246a842a603939f054f63c7fd753d2f671304b42d942895f4c0cf2`.
 - Generated `boot.img`: 102,416 bytes, SHA-256
-  `3260c8495abdd61fd5fae6793101a2eccd5422efb2384a54e825deace23158b0`.
+  `4550bffb6b2430c1072ed75a65b6282c002797c7adbe1c4a1bc865929dc91952`.
 - Generated `boot.img.tar`: 112,640 bytes, SHA-256
-  `db148e3c0eb8afc28a97cb2f8a12953e50df58c0065d6890efa4a053e2a433ef`.
+  `c0eb50ad16df7e5a92dcc64a9ab8a9a61d754fb8e5a3f445daa3830464b74303`.
 - Header checks pass: version 4, header size 1584, ramdisk size 0, kernel at
   offset 4096, footer present, tar contains only `boot.img`.
 - Image header keeps `text_offset=0x80000` like stock Samsung kernels; the
   payload itself is PC-relative and works at any load address.
+
+QEMU smoke test:
+
+- `shim/e1s/build.ps1 -Qemu` builds a separate image in
+  `shim/e1s/out-qemu/` with `-DPROBE_QEMU=1`.
+- `tools/e1s/run_qemu.ps1` runs it on `qemu-system-aarch64 -M virt` with
+  GICv3, a fake framebuffer, PL011 UART, and semihosting exit.
+- Observed output reached `PROBE DONE`, printed `CNTFRQ=0x3b9aca0`, read the
+  QEMU GIC IDs, and exited with code 0.
+- This test found a real FDT parser bug: node names were padded with
+  `(n + 3) & ~3` instead of `(n + 4) & ~3`, so the empty root node name made
+  the parser stop after the root. Fixed in `probe.c`.
+- The QEMU image is not flashable and does not prove S-Boot acceptance, S24
+  framebuffer access, UFS, or any other device behavior.
 
 Added:
 

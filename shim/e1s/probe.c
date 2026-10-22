@@ -2,18 +2,28 @@
 #include <stdint.h>
 #include "font.h"
 
+#ifdef PROBE_QEMU
+#define FB_BASE          0x50000000UL
+#define FB_WIDTH         640U
+#define FB_HEIGHT        480U
+#define LOG_BASE         0x50200000UL
+#define GICD_BASE        0x08000000UL
+#define GICR_BASE        0x080A0000UL
+#define UART_BASE        0x09000000UL
+#else
 #define FB_BASE          0xFA200000UL
 #define FB_WIDTH         1080U
 #define FB_HEIGHT        2340U
+#define LOG_BASE         0x91200000UL
+#define GICD_BASE        0x10200000UL
+#define GICR_BASE        0x10240000UL
+#endif
+
 #define FB_STRIDE        (FB_WIDTH * 4U)
 
-#define LOG_BASE         0x91200000UL
 #define LOG_MAGIC        "E1SPRB1"
 #define LOG_HEADER_SIZE  16U
 #define LOG_DATA_MAX     0xFF00U
-
-#define GICD_BASE        0x10200000UL
-#define GICR_BASE        0x10240000UL
 #define UFS_HCI_BASE     0x17100000UL
 
 #define CHAR_SCALE       2
@@ -42,6 +52,36 @@ static inline void wr32(uintptr_t a, uint32_t v)
 {
 	*(volatile uint32_t *)a = v;
 }
+
+#ifdef PROBE_QEMU
+static void uart_init(void)
+{
+	wr32(UART_BASE + 0x30, 0);
+	wr32(UART_BASE + 0x24, 1);
+	wr32(UART_BASE + 0x28, 0);
+	wr32(UART_BASE + 0x2c, 0x70);
+	wr32(UART_BASE + 0x38, 0);
+	wr32(UART_BASE + 0x44, 0x7ff);
+	wr32(UART_BASE + 0x30, 0x301);
+}
+
+static void uart_putc(char c)
+{
+	while (rd32(UART_BASE + 0x18) & (1U << 5))
+		;
+	wr32(UART_BASE, (uint32_t)(unsigned char)c);
+}
+
+static void qemu_exit(int code)
+{
+	register uintptr_t x0 __asm__("x0") = 0x18;
+	register uintptr_t x1 __asm__("x1") = (uintptr_t)code;
+
+	__asm__ volatile("hlt #0xf000" : "+r"(x0) : "r"(x1) : "memory");
+	for (;;)
+		__asm__ volatile("wfe");
+}
+#endif
 
 #define READ_SYSREG(name) \
 	static inline uint64_t read_##name(void) \
@@ -177,6 +217,9 @@ static void screen_putc(char c)
 
 static void out_char(char c)
 {
+#ifdef PROBE_QEMU
+	uart_putc(c);
+#endif
 	if (screen_ready)
 		screen_putc(c);
 	if (log_ready)
@@ -322,7 +365,7 @@ static void fdt_dump(uintptr_t dtb)
 		if (tok == 1) {
 			const uint8_t *name = (const uint8_t *)s;
 			uint32_t n = bounded_len(name, (uint32_t)(end - s));
-			s += (n + 3U) & ~3U;
+			s += (n + 4U) & ~3U;
 			depth++;
 			if (depth == 1) {
 				out("root=");
@@ -423,6 +466,7 @@ static void gic_dump(void)
 	out("\n");
 }
 
+#ifndef PROBE_QEMU
 static void ufs_dump(void)
 {
 	kv("UFS_CAP", rd32(UFS_HCI_BASE + 0x00));
@@ -430,6 +474,7 @@ static void ufs_dump(void)
 	kv("UFS_HCS", rd32(UFS_HCI_BASE + 0x30));
 	out("\n");
 }
+#endif
 
 void probe_exception(uint64_t slot)
 {
@@ -438,6 +483,9 @@ void probe_exception(uint64_t slot)
 	if (exception_busy)
 		halt();
 	exception_busy = 1;
+#ifdef PROBE_QEMU
+	uart_init();
+#endif
 	screen_ready = 0;
 	if (!log_ready)
 		log_init();
@@ -464,15 +512,25 @@ void probe_exception(uint64_t slot)
 	}
 	log_finish();
 	fill_rect(0, 0, FB_WIDTH, 160, 0x00FF0000U);
+#ifdef PROBE_QEMU
+	qemu_exit(1);
+#endif
 	halt();
 }
 
 void probe_main(uintptr_t dtb)
 {
+#ifdef PROBE_QEMU
+	uart_init();
+#endif
 	log_init();
 	screen_init();
 	out("E1S PROBE v1\n");
+#ifdef PROBE_QEMU
+	out("QEMU virt smoke test (not S24 hardware)\n");
+#else
 	out("SM-S921B e1s S5E9945\n");
+#endif
 	out("image ");
 	hex((uintptr_t)_head);
 	out_char('-');
@@ -494,9 +552,17 @@ void probe_main(uintptr_t dtb)
 	out("\nGIC\n");
 	gic_dump();
 	out("\nUFS\n");
+#ifdef PROBE_QEMU
+	out("QEMU virt has no e1s UFS; skipped\n");
+#else
 	ufs_dump();
+#endif
 	out("\nPROBE DONE\n");
 	log_finish();
+#ifdef PROBE_QEMU
+	out("QEMU EXIT\n");
+	qemu_exit(0);
+#endif
 	out("halt\n");
 	halt();
 }

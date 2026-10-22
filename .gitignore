@@ -1,11 +1,13 @@
 out/
 shim/e1s/out/
+shim/e1s/out-qemu/
 *.img
 *.img.tar
 *.bin
 *.elf
 *.o
 *.map
+*.dtb
 .venv/
 ziglang/
 __pycache__/

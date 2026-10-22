@@ -42,6 +42,7 @@ ports unless the probe confirms them on this phone.
       writes a log to RAM.
 - [x] Wrote a boot image packer, an image padding tool, and a log reader.
 - [x] Built the probe with Zig 0.16.0 and checked the output by hand.
+- [x] Added a QEMU `virt` smoke test for the payload.
 - [x] Checked that the installed TWRP matches the official `e1s` build.
 - [x] Recorded the firmware, CSC, bootloader revision, and root status.
 - [x] Made a 64 MiB stock BOOT backup and a BOOT-only restore tar.
@@ -107,9 +108,9 @@ Current builds:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `Image` | 96,832 | `57e97b962246863fc7cf0eeb7b60da7e503ef41f6f973c128ab3916d1865b3ff` |
-| `boot.img` | 102,416 | `3260c8495abdd61fd5fae6793101a2eccd5422efb2384a54e825deace23158b0` |
-| `boot.img.tar` | 112,640 | `db148e3c0eb8afc28a97cb2f8a12953e50df58c0065d6890efa4a053e2a433ef` |
+| `Image` | 96,832 | `3d4d91b314246a842a603939f054f63c7fd753d2f671304b42d942895f4c0cf2` |
+| `boot.img` | 102,416 | `4550bffb6b2430c1072ed75a65b6282c002797c7adbe1c4a1bc865929dc91952` |
+| `boot.img.tar` | 112,640 | `c0eb50ad16df7e5a92dcc64a9ab8a9a61d754fb8e5a3f445daa3830464b74303` |
 
 ## Building
 
@@ -130,6 +131,21 @@ On Windows with Zig:
 
 `-Pack` also writes `out/boot.img` and `out/boot.img.tar`. Without it, you only
 get `shim/e1s/out/Image`.
+
+For the QEMU smoke test:
+
+```powershell
+.\shim\e1s\build.cmd -Zig C:\path\to\zig.exe -Qemu
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\e1s\run_qemu.ps1
+```
+
+The QEMU build goes to `shim/e1s/out-qemu/` and uses a fake framebuffer, the
+QEMU PL011 UART, and the `virt` machine's GICv3. It checks that the image
+header, entry code, FDT parser, console, and exception path work. It does not
+test S-Boot, the S24 framebuffer, UFS, or any Samsung hardware.
+
+The runner needs `qemu-system-aarch64`. On Windows it also checks the default
+`C:\Program Files\qemu` install path.
 
 ## Testing
 
@@ -180,7 +196,7 @@ The exact commands and the cases where you should stop are in
 
 ```text
 shim/e1s/          Probe source and build scripts
-tools/e1s/         Boot image packer, image fixer, log reader
+tools/e1s/         Boot image packer, image fixer, log reader, QEMU runner
 docs/              Bring-up notes and the flash/test procedure
 AGENTS.md          Notes for anyone continuing the work
 E1S_PROGRESS.md    Build history and device notes

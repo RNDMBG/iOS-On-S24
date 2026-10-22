@@ -246,6 +246,33 @@ The log record starts with `E1SPRB1\0` followed by a 32-bit length and text.
 It is deliberately simple so a recovery-side reader can dump it without
 parsing pstore.
 
+## 3.1 QEMU smoke test
+
+The device image cannot run on a generic emulator, but the payload can run on
+QEMU's `virt` machine with a fake framebuffer and a PL011 console. This catches
+entry, linker, FDT, and exception-path mistakes without touching the phone.
+
+```powershell
+.\shim\e1s\build.cmd -Zig C:\path\to\zig.exe -Qemu
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\e1s\run_qemu.ps1
+```
+
+The script uses `qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a72
+-m 512 -nographic` and exits through ARM semihosting. A good run ends with:
+
+```text
+E1S PROBE v1
+QEMU virt smoke test (not S24 hardware)
+...
+  mem 0x0 0x40000000 0x0 0x20000000
+...
+PROBE DONE
+QEMU EXIT
+```
+
+It is a code smoke test, not a boot test. It does not exercise S-Boot, the
+`0xFA200000` framebuffer, UFS, or any other Samsung hardware.
+
 ## 4. Recovery and test procedure
 
 Prerequisites:

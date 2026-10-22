@@ -1,13 +1,20 @@
 param(
     [string]$Zig = $env:ZIG,
-    [switch]$Pack
+    [switch]$Pack,
+    [switch]$Qemu
 )
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
 $root = Resolve-Path (Join-Path $here "../..")
-$out = Join-Path $here "out"
+$outName = "out"
+if ($Qemu) { $outName = "out-qemu" }
+$out = Join-Path $here $outName
 $target = "aarch64-freestanding"
+
+if ($Qemu -and $Pack) {
+    throw "-Qemu and -Pack cannot be used together"
+}
 
 if (-not $Zig) {
     $cmd = Get-Command zig -ErrorAction SilentlyContinue
@@ -25,6 +32,7 @@ $cflags = @(
     "-fno-zero-initialized-in-bss", "-mstrict-align",
     "-mgeneral-regs-only", "-Wall", "-Wextra", "-Werror"
 )
+if ($Qemu) { $cflags += "-DPROBE_QEMU=1" }
 
 & $Zig cc @cflags (Join-Path $here "probe.c") -o (Join-Path $out "probe.o")
 if ($LASTEXITCODE -ne 0) { throw "probe.c compile failed" }
