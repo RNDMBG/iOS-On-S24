@@ -38,8 +38,7 @@ SMP, XNU entry, or any iOS userland.
 ### Samsung kernel
 
 Repository: `dx4m/android-kernel-samsung-e1s`
-Branches include `main`, `android14-6.1-S921BXXS8BYG2`, and
-`android14-6.1-S921BXXSDCZB2`. Kernel version is 6.1.
+The tree has Android 14, kernel 6.1 branches for S921B builds.
 
 Relevant files:
 
