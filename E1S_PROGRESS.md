@@ -196,3 +196,80 @@ Built locally with Zig 0.16.0: loader Image 98,304 bytes with payload offset
 format check only. No XNU kernel was built or run, and no image was flashed.
 Still needed: live RAM map, S-Boot entry level, GICR size, framebuffer
 ownership, and a real UFS root path.
+
+## 2026-10-23 - CI build, product tree, and topaz integration
+
+The experimental workflow ran on `experimental/xnu-e1s` and completed
+successfully (run `39929644259`, all steps including the XNU build and
+ADT/payload step). Uploaded artifacts:
+
+- `xnu-e1s-kernel`: 65,709,481 bytes
+- `xnu-e1s-buildtree`: 23,233,795 bytes
+
+The artifacts were not downloaded locally because the GitHub artifact API
+requires authentication and `gh` is not installed.
+
+After the run, the loader and image inputs were tightened:
+
+- `shim/e1s-xnu/gic.c`: e1s GICD/GICR pre-init adapted from topaz's proven
+  `test_gic()`: enable the NS distributor, wake the boot CPU redistributor,
+  set Group 1 priorities/PMR, and leave the PPI enables to XNU.
+- `start.S`: EL2 entry now enables ICV sysreg access and sets the EL1 marker;
+  this fixes the path that previously passed `el=2` to the loader.
+- `loader.c`: validates the appended payload and refuses a payload that
+  overlaps the XNU RAM window before zeroing it.
+- `tools/e1s/fetch_d22ap.py`: extracts only `DeviceTree.d22ap.im4p` from the
+  iPhone X 16.7.16 IPSW via HTTP ranges + LZFSE. The local `/product` tree is
+  186,084 bytes; the e1s ADT grew from 4,192 to 7,092 bytes.
+- `mkadt.py`: carries the real D22AP `/product` (gamut rewritten to sRGB) and
+  a speculative `/sweet-ufs` node at `0x17100000` for the UFSHCI root driver.
+- Topaz-derived tools copied into `tools/e1s/`: `mkiosroot.sh`,
+  `sweet-root-tweaks.py`, `mkinit.py`, `sweet-init.S`, `remotezip.py`,
+  `sweet-log.py`, and `patch-launchd-plist.py`.
+- `append_payload.py` limit raised from 16 MiB to 64 MiB so a real XNU payload
+  can be appended; `mkboot.py` still enforces the 64 MiB BOOT partition.
+
+Rebuilt loader: 202,000-byte ELF, 98,304-byte flat Image, payload offset
+`0x18000`; synthetic appended Image 114,720 bytes; synthetic boot v4 image
+122,896 bytes. No hardware image was built, flashed, or booted. The S24 UFS
+host may use UFS 4.0 MCQ rather than the legacy UTRL path, so the new UFS node
+is only a probe.
+
+## 2026-10-23 - boot-CPU MPIDR handling
+
+The XNU 8796 `ml_parse_cpu_topology()` code selects the boot CPU by the ADT
+CPU node with `state = "running"`, not by matching MPIDR. The `SweetCPU`
+driver then compares its provider's `reg` value with the topology's
+`phys_id`. The S8 base expected logical CPU 0 / MPIDR 0 and rejected any
+Aff1 above 0x700; topaz instead used MPIDR 0x100. The S24 boot MPIDR has not
+been measured, so hard-coding either value is unsafe.
+
+Changes:
+
+- `shim/e1s-xnu/adt_patch.c` walks the generated ADT, finds `/cpus` and its
+  first child, and rewrites the 4-byte `reg` property to the live
+  `MPIDR_EL1`. The loader calls it after copying the ADT, before XNU starts,
+  and fails closed with `ADT boot CPU MPIDR patch failed`.
+- `xnu/patches/0083-e1s-boot-mpidr.patch` removes the S8 MPIDR/Aff1 topology
+  restriction, replaces the boot-MPIDR-0 panic with a log line, and rejects
+  restarting the boot CPU by topology pointer instead of assuming MPIDR 0.
+- `xnu/patches/0084-e1s-skip-unported-hw.patch` gates the S8
+  `sweet_keys_init`, `sweet_touch_init`, and `sweet_usb_probe` calls behind
+  `sweethw=1`. Those drivers still use S8 SPMI/GENI/DWC3 addresses and would
+  fault or hang on e1s before the root path is reached.
+- `mkadt.py` keeps emitting `reg = <0>` as a placeholder; it is no longer the
+  value XNU sees on e1s.
+
+`0083` applies after `0018`, `0065`, and `0078`; its final `SweetCPU.cpp` was
+checked in a temporary tree, and a reverse/forward apply check returned the
+exact same file. `0084` was applied after the `0028-0081` `sweet_ufs.c`
+history and reverse/forward checked the same way. A host harness patched the
+generated 7,092-byte ADT from `reg=00000000` to `reg=efbeadde` for test MPIDR
+`0xdeadbeef` and returned 0.
+
+Rebuilt loader: 212,408-byte ELF, 98,304-byte flat Image, payload offset
+`0x18000`; `.text` 14,092, `.data` 81,920, `.bss` 20, and no relocation
+sections. The synthetic payload still produces a 114,720-byte appended Image
+and 122,896-byte boot v4 image. No device image was produced, flashed, or
+booted. The strict CI workflow, `0083`, and `0084` have not yet run; the
+branch is still uncommitted.

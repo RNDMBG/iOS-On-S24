@@ -1,0 +1,29 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 6b926fe..9c0618a 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -656,10 +656,20 @@ sweet_ufs_init(void)
+ 	    su.writable ? "read-write" : "read-only", su.dma_pa);
+ 	sweet_log_start();
+ 	sweet_sample_start();
+-	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
+-	sweet_keys_init();
+-	sweet_touch_init();
+-	sweet_usb_probe();
++	/*
++	 * The S8 keys/touch/USB drivers still poke S8 MMIO (SPMI, GENI, DWC3).
++	 * On e1s those addresses fault or hang, so keep them out of the way
++	 * until they are ported; sweethw=1 opts back in for debugging.
++	 */
++	int hw = 0;
++	(void)PE_parse_boot_argn("sweethw", &hw, sizeof(hw));
++	if (hw == 1) {
++		sweet_keys_init();
++		sweet_touch_init();
++		sweet_usb_probe();
++	} else {
++		printf("SWEET UFS: e1s keys/touch/USB skipped (sweethw=0)\n");
++	}
+ 	return 0;
+ }
+ 

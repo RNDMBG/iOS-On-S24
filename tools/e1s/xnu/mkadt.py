@@ -23,6 +23,10 @@ SOC_BASE = 0x10000000
 GICD, GICD_SIZE = 0x10200000, 0x10000
 GICR, GICR_SIZE = 0x10240000, 0x140000
 FB, FB_SIZE = 0xFA200000, 0x009a4000
+# The S8 SWEET UFS root driver is UFSHCI, not Qualcomm-specific. S24 exposes
+# its host at 0x17100000; S-Boot leaves it enabled while loading BOOT.
+# UFS 4.0 may use MCQ rather than the legacy UTRL path, so this is speculative.
+UFS, UFS_SIZE = 0x17100000, 0x3000
 SWEET_ECID = 0x4531533234000001  # 'E1S2' + 4, synthetic (not the phone ECID)
 FB_W, FB_H, FB_STRIDE = 1080, 2340, 1080 * 4
 TIMEBASE = 25600000
@@ -124,6 +128,7 @@ def build(seed=None, qemu=False, highmem=False):
             ('device_type', cstr('cpu')),
             # Keep the SWEET CPU driver's match until e1s CPU topology is known.
             ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
+            # The loader rewrites this to the live boot MPIDR before XNU starts.
             ('reg', u32(0)),
             ('cpu-id', u32(core)),
             ('cluster-id', u32(0)),
@@ -180,7 +185,14 @@ def build(seed=None, qemu=False, highmem=False):
         ('stride', u32(FB_STRIDE)),
     ])
 
-    # No UFS node yet: sweet_ufs.c drives Qualcomm's host, not the S24 UFSHCI.
+    # sweet_ufs.c looks up /sweet-ufs and maps its reg property; the driver
+    # itself is standard UFSHCI. Keep it out of the QEMU tree (QEMU has no
+    # controller at this address).
+    ufs = node('sweet-ufs', [
+        ph(),
+        ('compatible', cstr('samsung,ufshci') + cstr('sweet,ufs')),
+        ('reg', u64(UFS, UFS_SIZE)),
+    ])
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
@@ -198,6 +210,11 @@ def build(seed=None, qemu=False, highmem=False):
     ])
 
     product_props = d22ap_product()
+    # The S24 framebuffer is sRGB 8-bit. The iPhone X tree says P3, which
+    # makes WebKit render into 10-bit surfaces this kernel does not provide.
+    if product_props:
+        product_props = [(k, cstr('sRGB') if k == 'artwork-display-gamut' else v)
+                         for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
     # Identity of the iPhone X userland: compatible[0] is hw.model/hw.target
@@ -212,7 +229,7 @@ def build(seed=None, qemu=False, highmem=False):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product)
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':

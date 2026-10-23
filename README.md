@@ -55,8 +55,8 @@ ports unless the probe confirms them on this phone.
 - [ ] An XNU loader or boot trampoline for `e1s` that has been tested on the
       phone. An experimental one now exists on `experimental/xnu-e1s`.
 - [ ] XNU patches that have been built or booted on this phone. The
-      experimental branch carries the SWEET 16K/GICv3 base plus an e1s timer
-      patch; this is untested.
+      experimental branch carries the SWEET 16K/GICv3 base plus e1s timer and
+      boot-MPIDR patches; this is untested.
 - [ ] A UFS driver. This is the part I expect to take the longest.
 - [ ] A DECON/DSIM display driver. The probe only uses the framebuffer S-Boot
       already set up.
@@ -77,18 +77,37 @@ be read. It does not mean iOS boots.
 
 - `xnu/patches/0001-0081`: the SWEET 16 KiB-page/GICv3 XNU 8796 base.
 - `xnu/patches/0082-e1s-s24.patch`: e1s comments and virtual-timer INTID 27
-  (the ADT can override it). It does not add display, touch, UFS, RTC, or UI.
+  (the ADT can override it).
+- `xnu/patches/0083-e1s-boot-mpidr.patch`: removes the S8 boot-MPIDR and
+  topology assumptions so a single e1s boot CPU can use its live MPIDR. The
+  loader patches that MPIDR into the ADT before XNU starts.
+- `xnu/patches/0084-e1s-skip-unported-hw.patch`: keeps the S8 keys, touch and
+  USB drivers disabled by default. They still poke S8 MMIO and can fault on
+  e1s; `sweethw=1` opts back in for debugging.
+- These patches do not add working display, touch, UFS, RTC, or UI support.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to the assumed
-  `0x880000000` RAM window and jumps to XNU.
-- `tools/e1s/xnu/mkadt.py`: experimental ADT with e1s GIC, timer, framebuffer
-  and native 1080x2340 panel values.
+  `0x880000000` RAM window and jumps to XNU. It prepares the GICv3
+  distributor/redistributor, handles EL2 entry, writes the live boot-CPU
+  MPIDR into the ADT `/cpus/cpu0/reg`, and refuses a payload that overlaps
+  the RAM window before zeroing it.
+- `tools/e1s/xnu/mkadt.py`: experimental ADT with e1s GIC, timer, framebuffer,
+  native 1080x2340 panel, real D22AP `/product`, and a speculative
+  `/sweet-ufs` node at `0x17100000`.
 - `tools/e1s/append_payload.py`: append the payload to the loader Image and
   update its arm64 header so S-Boot loads both.
+- `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from the
+  iOS 16.7.16 IPSW and extract its `/product` tree.
+- `tools/e1s/mkiosroot.sh`, `sweet-root-tweaks.py`, `mkinit.py`: topaz-derived
+  tools to build an HFS+ iOS root and apply the bring-up tweaks.
 - `.github/workflows/xnu.yml`: macOS CI build for the SWEET machine config.
 
-None of this has been built by CI here, flashed, or booted. The RAM base/size,
-entry level, GICR extent, framebuffer address and UFS behaviour still need
-measurement on SM-S921B.
+The CI workflow has built the XNU kernel successfully (run `39929644259`), but
+that run predates the 0083/0084 e1s patches and its payload checks were not
+strict. No image has been flashed or booted. CI artifacts were uploaded; downloading
+them needs GitHub authentication. The RAM base/size, entry level, GICR extent,
+framebuffer address and UFS behaviour still need measurement on SM-S921B.
+The UFS node is a probe, not a working root: the S24 host may be in UFS 4.0
+MCQ mode instead of the legacy UTRL path this driver uses.
 
 The patch work I expect to do, in order:
 
@@ -101,7 +120,8 @@ The patch work I expect to do, in order:
 7. iOS userland.
 
 The iPhone X rootfs, shared cache, and other Apple binaries are not in this
-repo.
+repo. The root-building scripts expect those files from an IPSW on a Linux
+host with `apfs-fuse`, `hfsprogs`, and `sudo`.
 
 ## The probe
 
@@ -217,7 +237,9 @@ The exact commands and the cases where you should stop are in
 
 ```text
 shim/e1s/          Probe source and build scripts
-tools/e1s/         Boot image packer, image fixer, log reader, QEMU runner
+shim/e1s-xnu/      Experimental XNU loader (GIC prep, payload, boot args)
+tools/e1s/         Boot image packer, ADT/payload builders, QEMU runner,
+                   topaz-derived iOS-root/userland tools
 docs/              Bring-up notes and the flash/test procedure
 AGENTS.md          Notes for anyone continuing the work
 E1S_PROGRESS.md    Build history and device notes
@@ -239,6 +261,8 @@ E1S_PROGRESS.md    Build history and device notes
 - [TWRP for the Galaxy S24 5G Exynos](https://twrp.me/samsung/samsung_galaxy_e1s.html)
 - [Mu-Silicium e1s status](https://raw.githubusercontent.com/Project-Silicium/Mu-Silicium/refs/heads/main/Status.md)
 - [Samsung e1s kernel source](https://github.com/dx4m/android-kernel-samsung-e1s)
+- [ios-topaz](https://github.com/MakrSas/ios-topaz): iPhone X userland, boot
+  flow, and root-image tools used as a reference here.
 
 Mu-Silicium has display working on `e1s` but not internal storage. It's useful
 for checking hardware details, but it isn't a storage or iOS base.
@@ -246,4 +270,5 @@ for checking hardware details, but it isn't a storage or iOS base.
 ## License
 
 GPL-2.0-only for the probe and loader. XNU patch licensing follows Apple's
-published source terms.
+published source terms. The topaz-derived files under `tools/e1s/` retain
+their upstream terms; see the ios-topaz repository and its `CREDITS.md`.

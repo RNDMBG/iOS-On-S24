@@ -33,16 +33,21 @@ _start:
 	b	el1_entry
 
 from_el2:
-	/* XNU expects EL1. Open EL1 timer/counter and FP/SIMD, then eret. */
+	/* XNU expects EL1. Open EL1 timer/counter, GIC sysregs and FP/SIMD. */
 	mov	x1, #(1 << 31)		/* HCR_EL2.RW */
 	msr	hcr_el2, x1
 	mov	x1, #3			/* CNTHCTL_EL2.EL1PCTEN|EL1PCEN */
 	msr	cnthctl_el2, x1
+	mrs	x1, icc_sre_el2
+	mov	x2, #9			/* SRE | Enable: allow ICC_*_EL1 access */
+	orr	x1, x1, x2
+	msr	icc_sre_el2, x1
 	msr	cptr_el2, xzr
 	adr	x1, el1_entry
 	msr	elr_el2, x1
 	mov	x1, #0x3c5		/* EL1h, DAIF masked */
 	msr	spsr_el2, x1
+	mov	x20, #4			/* loader_main's EL marker: EL1 */
 	eret
 
 el1_entry:

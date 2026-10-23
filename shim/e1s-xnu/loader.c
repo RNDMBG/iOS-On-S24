@@ -7,7 +7,9 @@
  */
 #include <stdint.h>
 #include "../e1s/font.h"
+#include "adt_patch.h"
 #include "fdt.h"
+#include "gic.h"
 
 #define FB_BASE		0xFA200000UL
 #define FB_W		1080U
@@ -221,6 +223,15 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	if (el != 1)
 		return fail("not entered at EL1");
 
+	struct gic_info gi;
+	int gic_rc = gic_prepare(&gi);
+	kv("GIC", (uint64_t)gic_rc);
+	kv("GICD", gi.gicd);
+	kv("GICR", gi.gicr);
+	kv("MPIDR", gi.mpidr);
+	kv("SRE", (uint64_t)gi.sre);
+	out("\n");
+
 	/* Appended payload first. If it is absent, accept the S8/S-Boot initrd
 	 * convention so this loader can be tested without the append step. */
 	const struct payload *p = (const struct payload *)payload_addr();
@@ -257,18 +268,38 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	if (kernel_end >= mem_end)
 		return fail("kernel larger than RAM window");
 
-	out("zeroing XNU RAM...\n");
-	zero(p->phys_base, p->mem_size);
-	out("zeroed\n");
-
+	/* Validate the whole payload before zeroing anything. An appended
+	 * payload can land at any address S-Boot chooses; if that overlaps the
+	 * XNU window, zeroing first would destroy the source. */
+	uint64_t adt_end = p->adt_off + p->adt_size;
+	if (adt_end < p->adt_off || adt_end > (256UL << 20))
+		return fail("bad ADT offset/size");
+	uint64_t payload_len = adt_end;
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		if (s->vmaddr < p->virt_base || s->file_size > s->vmsize ||
 		    s->vmsize > p->mem_size ||
 		    s->vmaddr - p->virt_base > p->mem_size - s->vmsize)
 			return fail("bad segment");
+		uint64_t file_end = s->file_off + s->file_size;
+		if (file_end < s->file_off || file_end > (256UL << 20))
+			return fail("bad segment file range");
+		if (file_end > payload_len)
+			payload_len = file_end;
+	}
+	uintptr_t payload_start = (uintptr_t)p;
+	uintptr_t payload_end = payload_start + payload_len;
+	if (payload_start < mem_end && payload_end > p->phys_base)
+		return fail("payload overlaps XNU RAM");
+
+	out("zeroing XNU RAM...\n");
+	zero(p->phys_base, p->mem_size);
+	out("zeroed\n");
+
+	for (uint32_t i = 0; i < p->nsegs; i++) {
+		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = p->phys_base + (s->vmaddr - p->virt_base);
-		copy(dst, (uintptr_t)p + s->file_off, s->file_size);
+		copy(dst, payload_start + s->file_off, s->file_size);
 		zero(dst + s->file_size, s->vmsize - s->file_size);
 		clean(dst, dst + s->vmsize);
 		out("seg ");
@@ -285,6 +316,8 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	if (ba_pa + PAGE_16K > mem_end)
 		return fail("no room for ADT/boot_args");
 	copy(adt_pa, (uintptr_t)p + p->adt_off, p->adt_size);
+	if (adt_set_boot_cpu_mpidr(adt_pa, p->adt_size, (uint32_t)gi.mpidr))
+		return fail("ADT boot CPU MPIDR patch failed");
 	zero(ba_pa, PAGE_16K);
 
 	volatile struct boot_args *ba = (volatile struct boot_args *)ba_pa;

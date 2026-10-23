@@ -13,7 +13,7 @@ import sys
 
 ARM64_MAGIC = b"ARM\x64"
 PAYLOAD_MAGIC = b"SWEETXNU"
-MAX_IMAGE = 16 * 1024 * 1024
+MAX_IMAGE = 64 * 1024 * 1024
 
 
 def main():

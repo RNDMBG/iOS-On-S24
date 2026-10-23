@@ -16,7 +16,7 @@ on:
     branches: [experimental/xnu-e1s]
     paths:
       - "xnu/patches/**"
-      - "tools/e1s/xnu/**"
+      - "tools/e1s/**"
       - ".github/workflows/xnu.yml"
 
 concurrency:
@@ -96,15 +96,24 @@ jobs:
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
 
+      - name: Fetch D22AP product tree (optional)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 -m pip install --quiet lzfse
+          python3 tools/e1s/fetch_d22ap.py research/ipsw-x/d22ap.adt --force
+
       - name: Build experimental e1s ADT and payload
         if: always()
         run: |
-          python3 tools/e1s/xnu/mkadt.py out/e1s.adt --dump || true
+          python3 tools/e1s/xnu/mkadt.py out/e1s.adt --dump
           K=$(find out -maxdepth 1 -type f -name 'kernel.*' ! -name '*.dSYM' ! -name '*.link' | sort | head -1)
           if [ -n "$K" ]; then
             python3 tools/e1s/xnu/mkpayload.py "$K" out/e1s.adt out/e1s.payload \
-              --cmdline "debug=0x14e serial=3 cpus=1 keepsyms=1 sweetfb_native=1" || true
+              --cmdline "debug=0x14e serial=3 cpus=1 keepsyms=1 sweetfb_native=1"
+            test -s out/e1s.payload
           fi
+          shasum -a 256 out/e1s.adt out/e1s.payload 2>/dev/null || true
           ls -la out
 
       - uses: actions/upload-artifact@v4

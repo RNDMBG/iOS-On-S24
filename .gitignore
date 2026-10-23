@@ -8,6 +8,11 @@ shim/e1s/out-qemu/
 *.o
 *.map
 *.dtb
+*.adt
+*.ipsw
+*.dmg
+*.simg
+research/
 .venv/
 ziglang/
 __pycache__/
