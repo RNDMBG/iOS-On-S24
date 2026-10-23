@@ -1,0 +1,126 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -113,3 +113,4 @@
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/e1s_keys.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -53,5 +53,6 @@
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
++extern void e1s_keys_init(void);
+ 
+ #define REG_CAP         0x00
+@@ -656,4 +656,5 @@ sweet_ufs_init(void)
+ 	    su.writable ? "read-write" : "read-only", su.dma_pa);
+ 	sweet_log_start();
+ 	sweet_sample_start();
++	e1s_keys_init();
+ 	/*
+--- /dev/null
++++ b/bsd/dev/e1s_keys.c
+@@ -0,0 +1,100 @@
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void sweet_hid_key(int key, int down);
++void e1s_keys_init(void);
++
++#define E1S_GPIO_ALIVE_PA 0x12850000u
++#define E1S_GPA3_DAT_OFF  0x64u
++#define E1S_VOLUP_BIT     0u
++#define E1S_POLL_MS       20u
++#define E1S_DEBOUNCE      2u
++
++static vm_offset_t e1s_gpio;
++static boolean_t e1s_started;
++static int e1s_sleep_chan;
++
++static boolean_t
++e1s_volup_pressed(void)
++{
++	uint32_t v = *(volatile uint32_t *)(e1s_gpio + E1S_GPA3_DAT_OFF);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return (v & (1u << E1S_VOLUP_BIT)) == 0;
++}
++
++static void
++e1s_keys_wait(void)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(E1S_POLL_MS, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&e1s_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++e1s_keys_thread(void *arg, wait_result_t result)
++{
++	boolean_t stable = FALSE;
++	boolean_t candidate = FALSE;
++	unsigned int count = 0;
++	(void)arg;
++	(void)result;
++	for (;;) {
++		boolean_t raw = e1s_volup_pressed();
++		if (raw == candidate) {
++			if (count < E1S_DEBOUNCE) {
++				count++;
++			}
++		} else {
++			candidate = raw;
++			count = 1;
++		}
++		if (count >= E1S_DEBOUNCE && stable != candidate) {
++			stable = candidate;
++			printf("E1S KEYS: volume-up down=%d\n", stable ? 1 : 0);
++			sweet_hid_key(1, stable ? 1 : 0);
++		}
++		e1s_keys_wait();
++	}
++}
++
++void
++e1s_keys_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++	kern_return_t kr;
++	uint32_t raw;
++	if (e1s_started) {
++		return;
++	}
++	e1s_started = TRUE;
++	(void)PE_parse_boot_argn("e1skeys", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("E1S KEYS: disabled (e1skeys=0)\n");
++		return;
++	}
++	e1s_gpio = ml_io_map(E1S_GPIO_ALIVE_PA, 0x1000);
++	if (!e1s_gpio) {
++		printf("E1S KEYS: MMIO mapping failed\n");
++		return;
++	}
++	raw = *(volatile uint32_t *)(e1s_gpio + E1S_GPA3_DAT_OFF);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	printf("E1S KEYS: gpa3-0 dat=%#x volume-up=%d poll=%ums debounce=%u\n",
++	    raw, (raw & (1u << E1S_VOLUP_BIT)) == 0, E1S_POLL_MS, E1S_DEBOUNCE);
++	kr = kernel_thread_start(e1s_keys_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("E1S KEYS: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif

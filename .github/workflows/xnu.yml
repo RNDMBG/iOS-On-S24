@@ -17,6 +17,7 @@ on:
     paths:
       - "xnu/patches/**"
       - "tools/e1s/**"
+      - "docs/e1s-hardware-map.md"
       - ".github/workflows/xnu.yml"
 
 concurrency:
@@ -36,6 +37,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check e1s keys patch
+        run: python3 tools/e1s/test_e1s_keys.py
 
       - name: Fetch build script
         run: |

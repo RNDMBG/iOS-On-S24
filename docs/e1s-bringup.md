@@ -8,9 +8,10 @@ replace assumptions with device evidence.
 
 ## 0. Status against the old checklist
 
-The old feature list is not an e1s acceptance checklist. The only code in this
-repository is the probe; no XNU patch or hardware driver has been written for
-e1s yet.
+The old feature list is not an e1s acceptance checklist. The repository now has
+the probe plus experimental XNU scaffolding (`0082`-`0085`), but no
+hardware-validated e1s driver and no XNU boot. The table describes the original
+probe baseline.
 
 | Item | Older port assumption | S24 e1s reality | Current e1s code |
 | --- | --- | --- | --- |
@@ -21,10 +22,10 @@ e1s yet.
 | Touch | S6SY761 | STM SPI9 | none |
 | Storage | older UFS | S5E9945 UFS | reads HCI IDs only |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
-| Buttons | Bixby key | no Bixby; volume-up only | none |
+| Buttons | Bixby key | no Bixby; volume-up only | `0085` polling driver, untested |
 | USB | older USB | e1s USB | none |
 | Graphics | software | software only planned | none |
-| XNU | older patched tree | not patched | none |
+| XNU | older patched tree | experimental scaffold | `0082`-`0085`; not booted |
 | iOS userland/UI | older userland | not present | none |
 
 If the probe runs, it proves only that S-Boot accepted the BOOT image, the

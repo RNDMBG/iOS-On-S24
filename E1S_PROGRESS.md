@@ -279,3 +279,29 @@ XNU build, ADT/payload generation, and artifact upload. Artifacts:
 `xnu-e1s-kernel` 65,708,572 bytes and `xnu-e1s-buildtree` 23,235,517 bytes.
 They still require GitHub authentication to download. No device flash or boot
 has been attempted.
+
+## 2026-10-23 - hardware map and volume-up driver patch
+
+Added `docs/e1s-hardware-map.md`, separating A15 DTS facts, driver-register
+facts, derived addresses, references, and unmeasured assumptions. Key
+corrections:
+
+- The UFS controller is `ufs@17100000`; `0x17020000` is `sysreg_ufs`, not HCI.
+- `hsi2c_43` at `0x14180000` is the front-camera EEPROM bus, not the display.
+  The panel is on DSIM0 with reset `gpc7-0`, active-low.
+- Volume-up is `gpa3-0`, `DAT` `0x12850064` bit 0; pressed is assumed low.
+
+Added `xnu/patches/0085-e1s-gpio-keys.patch`:
+
+- New `bsd/dev/e1s_keys.c`, added to `bsd/conf/files` after `sweet_usb.c`.
+- Maps ALIVE `0x12850000`, polls `0x12850064` every 20 ms, debounces two
+  samples, and calls `sweet_hid_key(1, down)`.
+- `e1skeys=0` disables it. It is read-only and runs outside the `sweethw` gate.
+- `sweet_ufs.c` declares and calls `e1s_keys_init()` after
+  `sweet_sample_start()`.
+
+Added `tools/e1s/test_e1s_keys.py` and a CI step to run it. The host check
+passed; the patch applied cleanly to a temporary post-0072/post-0084 tree with
+the expected `sweet_ufs.c` and `conf/files` insertions. It has not been built
+by the strict XNU workflow or tested on the phone. No device image was produced,
+flashed, or booted.
