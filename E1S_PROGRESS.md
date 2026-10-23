@@ -176,3 +176,23 @@ Append the first probe result here with:
 - screen photograph or transcribed text
 - physical log bytes from `0x91200000`
 - whether the phone returned to Android/recovery cleanly
+
+## 2026-10-23 - experimental XNU scaffold (branch only)
+
+Not a boot result. Added on `experimental/xnu-e1s`:
+
+- S8/SWEET XNU 8796 patch base `0001-0081` plus
+  `0082-e1s-s24.patch` (virtual timer INTID 27; ADT can override).
+- `shim/e1s-xnu/` loader: arm64 Image, EL2-to-EL1 drop, 16 KiB boot-args,
+  appended `SWEETXNU` payload, 1080x2340 framebuffer console and
+  `E1SXNU01` log at `0x91200000`.
+- `tools/e1s/xnu/mkadt.py`: speculative RAM window at `0x880000000`
+  (512 MiB), GICD `0x10200000`, GICR `0x10240000`, FB `0xFA200000`,
+  timer 25.6 MHz, native panel.
+- `tools/e1s/append_payload.py` and `.github/workflows/xnu.yml`.
+
+Built locally with Zig 0.16.0: loader Image 98,304 bytes with payload offset
+`0x18000`. A synthetic payload packed to a 122,896-byte boot v4 image as a
+format check only. No XNU kernel was built or run, and no image was flashed.
+Still needed: live RAM map, S-Boot entry level, GICR size, framebuffer
+ownership, and a real UFS root path.

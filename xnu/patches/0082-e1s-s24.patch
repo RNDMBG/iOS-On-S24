@@ -1,0 +1,27 @@
+diff --git a/pexpert/pexpert/arm64/SWEET.h b/pexpert/pexpert/arm64/SWEET.h
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -1,6 +1,6 @@
+ /*
+- * Board config for the Redmi Note 10 Pro ("sweet", Qualcomm SM7150 /
+- * Snapdragon 732G): Kryo 470 = Cortex-A76 + Cortex-A55, ARMv8.2, no PAC.
++ * Experimental Galaxy S24 (SM-S921B, e1s, Exynos 2400) config, derived from
++ * the SWEET board config. ARMv9, 16K pages, GICv3, no PAC.
+  *
+  * Generic ARM like BCM2837 (no APPLE_ARM64_ARCH_FAMILY: none of Apple's
+  * implementation-defined system registers exist), 16K pages and GICv3 like
+@@ -35,11 +35,10 @@
+ #endif /* ! ASSEMBLER */
+ 
+ /*
+- * Qualcomm numbers the architected timer PPIs 1/2/3/0 (secure phys, phys,
+- * virt, hyp) instead of the usual 13/14/11/10: the virtual timer XNU uses
+- * (CNTV) is INTID 16 + 3 = 19.
++ * The Galaxy S24 uses the usual ARM timer mapping: the virtual timer is
++ * PPI 11 (INTID 16 + 11 = 27). The ADT can override this value.
+  */
+-#define SWEET_VTIMER_INTID        19
++#define SWEET_VTIMER_INTID        27
+ #define SWEET_IPI_SGI             1       // SGI used for cross-CPU signals
+ 
+ #define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt

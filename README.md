@@ -52,8 +52,11 @@ ports unless the probe confirms them on this phone.
 ## What isn't done
 
 - [ ] Flashing the probe and getting the first real device log.
-- [ ] An XNU loader or boot trampoline for `e1s`.
-- [ ] Any XNU patches for this phone.
+- [ ] An XNU loader or boot trampoline for `e1s` that has been tested on the
+      phone. An experimental one now exists on `experimental/xnu-e1s`.
+- [ ] XNU patches that have been built or booted on this phone. The
+      experimental branch carries the SWEET 16K/GICv3 base plus an e1s timer
+      patch; this is untested.
 - [ ] A UFS driver. This is the part I expect to take the longest.
 - [ ] A DECON/DSIM display driver. The probe only uses the framebuffer S-Boot
       already set up.
@@ -67,17 +70,25 @@ A probe that reaches `PROBE DONE` only proves that S-Boot accepted the image,
 the payload ran, the framebuffer was usable, and the GIC/UFS ID registers could
 be read. It does not mean iOS boots.
 
-## Patches
+## Experimental XNU branch
 
-There are no XNU patches for `e1s` in this repo. I kept one old GICv3 patch
-from earlier experiments as a reference:
+`main` is the probe-only branch (QEMU-tested, not yet device-tested). Branch
+`experimental/xnu-e1s` is an untested scaffold for the next step:
 
-| Patch | What it is | Status |
-| --- | --- | --- |
-| `0086-a5xelte-gicv2-platform.patch` | Older GICv3 platform work | Reference only, not applied |
+- `xnu/patches/0001-0081`: the SWEET 16 KiB-page/GICv3 XNU 8796 base.
+- `xnu/patches/0082-e1s-s24.patch`: e1s comments and virtual-timer INTID 27
+  (the ADT can override it). It does not add display, touch, UFS, RTC, or UI.
+- `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to the assumed
+  `0x880000000` RAM window and jumps to XNU.
+- `tools/e1s/xnu/mkadt.py`: experimental ADT with e1s GIC, timer, framebuffer
+  and native 1080x2340 panel values.
+- `tools/e1s/append_payload.py`: append the payload to the loader Image and
+  update its arm64 header so S-Boot loads both.
+- `.github/workflows/xnu.yml`: macOS CI build for the SWEET machine config.
 
-That patch does not add S24 display, touch, UFS, RTC, or UI support, and I
-don't want anyone to read it that way.
+None of this has been built by CI here, flashed, or booted. The RAM base/size,
+entry level, GICR extent, framebuffer address and UFS behaviour still need
+measurement on SM-S921B.
 
 The patch work I expect to do, in order:
 
