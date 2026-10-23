@@ -101,9 +101,9 @@ be read. It does not mean iOS boots.
   tools to build an HFS+ iOS root and apply the bring-up tweaks.
 - `.github/workflows/xnu.yml`: macOS CI build for the SWEET machine config.
 
-The CI workflow has built the XNU kernel successfully (run `39929644259`), but
-that run predates the 0083/0084 e1s patches and its payload checks were not
-strict. No image has been flashed or booted. CI artifacts were uploaded; downloading
+The CI workflow has built the XNU kernel successfully. The latest strict run,
+`39943555573`, includes `0083` and `0084`; the first run was `39929644259`.
+No image has been flashed or booted. CI artifacts were uploaded; downloading
 them needs GitHub authentication. The RAM base/size, entry level, GICR extent,
 framebuffer address and UFS behaviour still need measurement on SM-S921B.
 The UFS node is a probe, not a working root: the S24 host may be in UFS 4.0

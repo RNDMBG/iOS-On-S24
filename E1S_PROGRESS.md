@@ -271,5 +271,11 @@ Rebuilt loader: 212,408-byte ELF, 98,304-byte flat Image, payload offset
 `0x18000`; `.text` 14,092, `.data` 81,920, `.bss` 20, and no relocation
 sections. The synthetic payload still produces a 114,720-byte appended Image
 and 122,896-byte boot v4 image. No device image was produced, flashed, or
-booted. The strict CI workflow, `0083`, and `0084` have not yet run; the
-branch is still uncommitted.
+booted.
+
+Commit `62d7422` was pushed to `origin/experimental/xnu-e1s`. The strict
+workflow then ran as `39943555573` and completed successfully, including the
+XNU build, ADT/payload generation, and artifact upload. Artifacts:
+`xnu-e1s-kernel` 65,708,572 bytes and `xnu-e1s-buildtree` 23,235,517 bytes.
+They still require GitHub authentication to download. No device flash or boot
+has been attempted.
