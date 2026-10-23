@@ -1,3 +1,5 @@
+> **WARNING: THIS PROJECT HAS NOT BEEN TESTED YET. TEST AT YOUR OWN RISK.**
+
 # iOS 16.7 on the Galaxy S24 (Exynos)
 
 I'm working on getting XNU and an iPhone X iOS 16.7 userland running on the
