@@ -20,7 +20,7 @@ probe baseline.
 | Timer | 26 MHz | 25.6 MHz | prints `CNTFRQ_EL0`; no init |
 | Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB only |
 | Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
-| Storage | older UFS | S5E9945 UFS | reads HCI IDs only |
+| Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
 | Buttons | Bixby key | no Bixby; volume-up only | `e1s_input.c`, untested |
 | USB | older USB | e1s USB | none |
@@ -58,11 +58,13 @@ What is e1s-specific so far:
 | Machine config, 10 CPUs, 4 clusters | `0001` | builds |
 | Redwood hardware gating, volume-up | `0002` | builds |
 | STM SPI9 touch | `0003` | builds, untested |
+| UFS 4.0/MCQ read-only root | `0005` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
-Not ported: UFS root, PMIC/ACPM (including the touch LDOs), RTC, USB,
-battery, cameras, and any SMP configuration beyond the boot CPU.
+Not ported: PMIC/ACPM (including the touch LDOs and the UFS rails), RTC, USB,
+battery, cameras, and any SMP configuration beyond the boot CPU. The UFS driver
+exists but has not been exercised on the phone.
 
 ## 1. Source facts
 
@@ -200,7 +202,34 @@ The board supplies:
 
 The UFS host is much newer than the one in older Exynos phones. Mu-Silicium
 does not have working S5E9945 UFS, and an older XNU driver cannot be assumed to
-work.
+work. Samsung's Android driver uses UFS 4.0 MCQ: the queue configuration
+registers are at `0x17100400 + 0x40 * queue`, and queue 0's submission and
+completion head/tail registers are at SQD `0x17140000` offsets `0x00/0x04` and
+`0x40/0x44`.
+
+`0005-e1s-ufs.patch` adds a polled, read-only block driver. It reuses the live
+host state left by S-Boot instead of re-running PHY/UNIPRO/CPORT calibration:
+
+- If the host is in legacy mode (`HCS.UTRLRDY`), it waits for the bootloader's
+  doorbells to clear, stops the UTRL, points it at the kernel's own 32-byte
+  UTRD array and restarts it.
+- If the host is in MCQ mode (`MEM_CFG` bit 0), it stops and disables queue 0,
+  programs the queue's base addresses and MCQ offsets, aligns the head/tail
+  pointers and restarts it. Other queues are not touched.
+- The driver issues TEST UNIT READY, READ CAPACITY(10) and READ(10), reads the
+  GPT, and finds a partition by name. It exposes `/dev/ufsroot0` and
+  `/dev/rufsroot0`; writes return `EROFS`. Root with `rd=ufsroot0`.
+- Boot arguments: `e1sufs=0` disables the driver, `e1sufs_probe=0` hides the
+  register summary, `e1sufs_mcq=1` or `e1sufs_legacy=1` forces a mode,
+  `ufsroot=NAME` selects the GPT partition (default `userdata`), and
+  `ufs_lun=N` selects the LUN (default 0).
+- One 1 MiB contiguous allocation holds the SQ, CQ, UCD/PRDT and bounce buffer;
+  caches are flushed around each command because the host is not coherent.
+
+The driver compiles and the patch applies, but **no command has been issued on
+the phone**. The first test image only calls `e1s_ufs_probe()` during
+`bsd_init` to print the HCI/MCQ register state; it does not put `rd=ufsroot0`
+on the command line, so a UFS failure cannot mask the loader/display test.
 
 ### Display
 
@@ -381,6 +410,8 @@ reference, not a drop-in.
 - Is an EL2 monitor active, and does it allow an EL1 payload to run?
 - Can the UFS host be driven after S-Boot, or does the loader need to
   reinitialize PHY/UNIPRO/CPORT and PMIC rails?
+- Does S-Boot leave UFS in legacy UTRL mode or MCQ mode, and does it keep the
+  UFS clocks and L8/S4-L5 rails on across the handoff?
 - Which retail DTS revision matches the user's SM-S921B firmware?
 - Does the bootloader accept a boot v4 image with a ramdisk, or is a
   separate recovery/init_boot path required?

@@ -238,13 +238,28 @@ From `s5e9945-ufs.dtsi`:
 | UFS sysreg | `0x17020000` | `0x1000` |
 
 The controller is UFS 4.0 with MCQ interrupts and a separate SQD block. The
-older 8-bit UTRL/UTRD driver from the S8 port cannot be assumed to work. The e1s
+older UTRL/UTRD driver from the S8 port cannot be assumed to work. The e1s
 UFS supplies are `l8_reg` and `s4_l5_reg`; they must be enabled before any host
 access.
 
 `0x17020000` is the UFS **sysreg**, not the HCI base. The HCI base is
 `0x17100000`. This distinction matters when porting the loader and the XNU UFS
 driver.
+
+Samsung's driver selects MCQ mode with `MEM_CFG` (HCI `+0x300`) bit 0 and
+writes `1` to the vendor multi-circular register at HCI `+0x180`. The per-queue
+configuration block is HCI `+0x400 + 0x40 * queue`; for queue 0 the submission
+queue doorbell offset is `0x40000`, the submission interrupt-status offset is
+`0x40016`, the completion doorbell offset is `0x4002c`, and the completion
+interrupt-status offset is `0x40042`. Queue 0's runtime registers are in SQD:
+SQ head/tail at `+0x00/+0x04`, stop/start at `+0x08` with status at `+0x10`,
+and CQ head/tail at `+0x40/+0x44`. Each further queue is `0x1000` bytes after
+the previous one.
+
+`0005-e1s-ufs.patch` is a polled read-only driver for this host. It handles
+both the legacy UTRL list and MCQ queue 0, but it has not been tested on the
+phone. Its first image only prints the register summary at `bsd_init`; it does
+not use `rd=ufsroot0`.
 
 ## 8. USB
 

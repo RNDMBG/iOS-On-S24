@@ -9,8 +9,32 @@ on the old `xnu/patches/0001-0085` SWEET series.
 | `0002-e1s-input.patch` | builds | gate redwood-only input/UFS/GPU probing; e1s volume-up GPIO key |
 | `0003-e1s-touch.patch` | builds, untested | STM controller on SPI9: bit-banged CLK/MOSI/MISO, CS `gpp9-3`, IRQ `gpa1-2`, `0x87` event reads |
 | `0004-e1s-display.patch` | not needed yet | HackiOS's `MiniIOMobileFramebuffer` already uses `boot_args.video`; the loader supplies it and finds it in the S-Boot DTB |
-| `0005-e1s-ufs.patch` | planned | S5E9945 UFS 4.0/MCQ root device (the loader-shared UFS path is not implemented) |
+| `0005-e1s-ufs.patch` | builds, untested | S5E9945 UFS 4.0/MCQ read-only root device: HCI `0x17100000`, SQD `0x17140000`, GPT partition lookup, `rd=ufsroot0` |
 | `0006-e1s-camera.patch` | planned | Exynos CSIS/ISP camera path (HackiOS's Qualcomm camera driver cannot be reused) |
+
+### UFS (0005)
+
+`0005-e1s-ufs.patch` adds `bsd/dev/e1s_ufs.c`, a polled, read-only block driver
+for the S5E9945 UFS 4.0 host:
+
+- HCI `0x17100000`, SQD `0x17140000`, queue 0 only.
+- It takes over the live host that S-Boot used. A legacy host gets a new UTRL
+  base and list run; an MCQ host has queue 0 stopped, disabled and reprogrammed.
+  It does not re-run PHY/UNIPRO/CPORT calibration or touch the PMIC rails.
+- SCSI TEST UNIT READY, READ CAPACITY(10) and READ(10). A GPT partition is
+  selected by name (`userdata` by default, `ufsroot=` to override) and exposed
+  as `/dev/ufsroot0` (block) and `/dev/rufsroot0` (char). Writes are refused.
+- Commands are polled; interrupts are masked. All DMA goes through one 1 MiB
+  contiguous allocation and the caches are flushed around each command.
+- Boot arguments: `e1sufs=0` disables the driver, `e1sufs_probe=0` hides the
+  register summary, `e1sufs_mcq=1` / `e1sufs_legacy=1` force a submission mode,
+  `ufsroot=NAME` and `ufs_lun=N` choose the partition and LUN.
+- Root with `rd=ufsroot0`.
+
+The driver compiles and passes `tools/e1s/test_e1s_ufs.py`, but it has never run
+on the phone. The first test image only prints the register summary at
+`bsd_init`; it does **not** use `rd=ufsroot0`, so an untested UFS command path
+cannot turn the first display test into a root panic.
 
 ## Build
 

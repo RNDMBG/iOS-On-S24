@@ -127,8 +127,17 @@ This build produced:
 | `out/e1s-boot-touch.img` | 16,334,864 bytes |
 | `out/e1s-boot-touch.img.tar` | 16,343,040 bytes |
 
+This build's SHA-256 values:
+
+- `e1s-boot-touch.img`:
+  `752ee2d1767bc082c0ca423290ddf8728e80b70f6fb37a71fe0bd7430cbf03be`
+- `e1s-boot-touch.img.tar`:
+  `b7fe909c32d9189efe28dcb6fb222ab5a5b042eb9b07ee80d149acb392f37d4a`
+
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
-not a hash copied from an old log.
+not a hash copied from an old log. The ADT must be regenerated with
+`mkadt.py` before the payload is rebuilt; the current ADT fallback is
+`0xA0000000`, not the old `0x880000000`.
 
 ## 4. Flash only BOOT
 
@@ -145,11 +154,19 @@ the EL/SCTLR/DTB values, the DTB and fallback framebuffer, the RAM window it
 chose, the segment copies, the ADT and `boot_args` addresses, and
 `JUMP TO XNU`.
 
+After the jump, XNU should print its early console and then `bsd_init` calls
+`e1s_ufs_probe()`, which prints an `e1s-ufs:` register summary (CAP, HCS/HCE,
+`MEM_CFG` legacy/MCQ mode, and queue 0 state). The first image has no
+`rd=ufsroot0`, so the expected end of this test is a missing-root stop after
+that summary, not iOS boot. The UFS summary is register evidence, not a UFS
+command test.
+
 Photograph the entire screen after at least 60 seconds. Record whether:
 
 - the loader text appears at all (if not, the framebuffer address or the
   boot image is wrong);
 - the screen changes after `JUMP TO XNU` (XNU took over the video console);
+- the `e1s-ufs:` lines appear and what mode they report;
 - the phone reboots, hangs, or shows a panic.
 
 A black screen is a failure even if the log can be read. Do not describe the

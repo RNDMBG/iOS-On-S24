@@ -1,0 +1,1136 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index c336b4d..a696d5e 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -111,6 +111,7 @@ bsd/dev/unix_startup.c			standard
+ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/e1s_input.c		standard
+ bsd/dev/e1s_touch.c		standard
++bsd/dev/e1s_ufs.c		standard
+ bsd/dev/redwood_input.c		standard
+ bsd/dev/redwood_virtio_input.c	standard
+ bsd/dev/redwood_goodix.c	standard
+diff --git a/bsd/dev/e1s_ufs.c b/bsd/dev/e1s_ufs.c
+new file mode 100644
+index 0000000..92f6663
+--- /dev/null
++++ b/bsd/dev/e1s_ufs.c
+@@ -0,0 +1,1064 @@
++/*
++ * e1s UFS: the Exynos 2400 (S5E9945) UFS 4.0 host.
++ *
++ * This is a read-only block driver for the phone's internal storage.  It is
++ * deliberately small: one polled command at a time, one logical unit (LUN 0),
++ * one GPT partition, no interrupts.  The bootloader has already powered the
++ * UFS rails, calibrated the PHY and brought the link up while it loaded the
++ * BOOT image, so the driver reuses that state instead of re-running the
++ * Exynos PHY/UNIPRO calibration.
++ *
++ * The host can be in either of the two UFSHCI submission modes:
++ *
++ *   - MCQ (UFS 4.0, what Samsung's Android driver uses): a submission queue
++ *     of 32-byte UTRDs in normal memory, a completion queue of 32-byte CQEs,
++ *     and the queue 0 head/tail registers in the SQD block at 0x17140000.
++ *   - legacy single-doorbell mode: the UTRL at HCI+0x50 and the doorbell at
++ *     HCI+0x58.  The older SWEET driver used this path.
++ *
++ * The mode is taken from UFS_MEM_CFG (HCI+0x300) bit 0, which is what
++ * Samsung's driver sets after it has programmed the MCQ queues.  The driver
++ * can be forced with e1sufs_mcq=1 or e1sufs_legacy=1 for a bring-up test.
++ *
++ * Addresses are from arch/arm64/boot/dts/exynos/s5e9945-ufs.dtsi:
++ *   HCI    0x17100000 (0x3000)   MCQ registers at +0x400
++ *   SQD    0x17140000 (0x15100)  queue 0 head/tail at +0x00/+0x04,
++ *                                CQ head/tail at +0x40/+0x44
++ *
++ * The bootloader's queue memory is not reused.  All descriptors, the response
++ * UPIU, the PRDT and a 1 MiB bounce buffer come from one physically
++ * contiguous allocation owned by this kernel.  DMA is not coherent on this
++ * SoC, so the caches are cleaned/invalidated around every command.  Writes
++ * are refused.
++ *
++ * Boot arguments:
++ *   e1sufs=0          do not touch the controller
++ *   e1sufs_probe=0    do not print the register summary at bsd_init
++ *   e1sufs_mcq=1      force MCQ submission
++ *   e1sufs_legacy=1   force the legacy UTRL/doorbell path
++ *   ufsroot=NAME      GPT partition name, default "userdata"
++ *   ufs_lun=N         logical unit, default 0
++ *
++ * Root on it with rd=ufsroot0.
++ */
++#if defined(ARM64_BOARD_CONFIG_E1S)
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/buf.h>
++#include <sys/conf.h>
++#include <sys/disk.h>
++#include <sys/errno.h>
++#include <sys/proc.h>
++#include <sys/uio.h>
++#include <miscfs/devfs/devfs.h>
++#include <kern/locks.h>
++#include <kern/clock.h>
++#include <machine/machine_routines.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
++#include <pexpert/pexpert.h>
++#include <libkern/libkern.h>
++
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_UFS_HCI_PA          0x17100000UL
++#define E1S_UFS_HCI_SIZE        0x3000U
++#define E1S_UFS_SQD_PA          0x17140000UL
++#define E1S_UFS_SQD_SIZE        0x15100U
++
++#define E1S_UFS_DEV_BLOCK       4096U
++#define E1S_UFS_BOUNCE          (1U << 20)
++#define E1S_UFS_PRDT_CHUNK      (256U << 10)
++#define E1S_UFS_PRDT_MAX        (E1S_UFS_BOUNCE / E1S_UFS_PRDT_CHUNK)
++#define E1S_UFS_MAX_ENTRIES     64U
++#define E1S_UFS_CMD_TIMEOUT_NS  (5ULL * NSEC_PER_SEC)
++
++/* UFSHCI registers (offsets from HCI base) */
++#define HCI_CAP                 0x00
++#define HCI_MCQCAP              0x04
++#define HCI_VERSION             0x08
++#define HCI_IS                  0x20
++#define HCI_IE                  0x24
++#define HCI_HCS                 0x30
++#define HCI_HCE                 0x34
++#define HCI_UTRLBA              0x50
++#define HCI_UTRLBAU             0x54
++#define HCI_UTRLDBR             0x58
++#define HCI_UTRLCLR             0x5c
++#define HCI_UTRLRSR             0x60
++#define HCI_MEM_CFG             0x300
++#define HCI_MCQ_CFG             0x380
++#define HCI_MCQ_MULTI_CIRCULAR  0x180
++#define HCI_MCQ_BASE            0x400
++
++#define CAP_MCQ_SUPPORT         (1U << 30)
++#define CAP_64_ADDRESSING       (1U << 24)
++#define CAP_SLOTS_MASK          0x1fU
++#define HCS_DEVICE_PRESENT      (1U << 0)
++#define HCS_UTRL_READY          (1U << 1)
++#define HCE_ENABLE              (1U << 0)
++#define MEM_CFG_MCQ             (1U << 0)
++#define MCQ_CFG_MAC_MASK        (0xffU << 8)
++
++/* MCQ per-queue configuration (HCI+0x400 + 0x40 * queue) */
++#define MCQ_SQATTR              0x00
++#define MCQ_SQLBA               0x04
++#define MCQ_SQUBA               0x08
++#define MCQ_SQDAO               0x0c
++#define MCQ_SQISAO              0x10
++#define MCQ_CQATTR              0x20
++#define MCQ_CQLBA               0x24
++#define MCQ_CQUBA               0x28
++#define MCQ_CQDAO               0x2c
++#define MCQ_CQISAO              0x30
++#define MCQ_QUEUE_CFG_SIZE      0x40
++#define MCQ_QUEUE_ENABLE        (1U << 31)
++#define MCQ_QUEUE_SIZE(entries) (((entries) * 8U) - 1U)
++
++/* Samsung's MCQ operation/runtime offsets for queue 0 */
++#define SQD_OFFSET_SQ           0x40000U
++#define SQD_OFFSET_SQIS         0x40016U
++#define SQD_OFFSET_CQ           0x4002cU
++#define SQD_OFFSET_CQIS         0x40042U
++
++/* SQD block, queue 0 */
++#define SQD_SQHP                0x00
++#define SQD_SQTP                0x04
++#define SQD_SQRTC               0x08
++#define SQD_SQCTI               0x0c
++#define SQD_SQRTS               0x10
++#define SQD_CQHP                0x40
++#define SQD_CQTP                0x44
++#define SQD_RTC_STOP            0x1U
++#define SQD_RTC_START           0x0U
++#define SQD_RTS_STOPPED         0x1U
++
++struct e1s_utrd {
++	uint32_t dw0, dw1, dw2, dw3;
++	uint32_t ucdba, ucdbau;
++	uint32_t resp;          /* [31:16] response UPIU offset, [15:0] length, DWORDs */
++	uint32_t prdt;          /* [31:16] PRDT offset (DWORDs), [15:0] entries */
++};
++
++struct e1s_cqe {
++	uint64_t ucdba;
++	uint16_t resp_len;
++	uint16_t resp_off;
++	uint16_t prdt_len;
++	uint16_t prdt_off;
++	uint32_t status;
++	uint32_t reserved[3];
++};
++
++struct e1s_prdt {
++	uint32_t addr_lo, addr_hi, reserved, dbc;
++};
++
++struct e1s_ucd {
++	uint8_t cmd[512];
++	uint8_t resp[512];
++	struct e1s_prdt prdt[E1S_UFS_PRDT_MAX];
++};
++
++/* Layout of the contiguous DMA allocation. */
++#define DMA_SQ                  0x0000
++#define DMA_CQ                  0x0800
++#define DMA_UCD                 0x1000
++#define DMA_BOUNCE              0x2000
++#define DMA_SIZE                (DMA_BOUNCE + E1S_UFS_BOUNCE)
++
++static struct {
++	vm_offset_t hci;
++	vm_offset_t sqd;
++	vm_offset_t dma;
++	uint64_t dma_pa;
++	uint32_t cap;
++	uint32_t entries;
++	uint32_t dev_block;
++	uint8_t lun;
++	uint8_t tag;
++	uint32_t sq_tail;
++	uint32_t cq_head;
++	uint64_t first_block, nblocks;          /* GPT partition, in device blocks */
++	uint32_t secsize;                       /* logical sector size for the BSD layer */
++	bool mcq;
++	bool ready;
++	bool mapped;
++	int bmajor, cmajor;
++	dev_t bdev;
++} su;
++
++static LCK_GRP_DECLARE(e1s_ufs_grp, "e1s-ufs");
++static LCK_MTX_DECLARE(e1s_ufs_lock, &e1s_ufs_grp);
++
++static inline uint32_t
++hci_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(su.hci + off);
++}
++
++static inline void
++hci_wr(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(su.hci + off) = value;
++}
++
++static inline uint32_t
++sqd_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(su.sqd + off);
++}
++
++static inline void
++sqd_wr(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(su.sqd + off) = value;
++}
++
++static void
++e1s_ufs_dma_sync(uint32_t off, uint32_t len)
++{
++	flush_dcache64((addr64_t)(su.dma_pa + off), len, TRUE);
++}
++
++static bool
++e1s_ufs_map(void)
++{
++	if (su.mapped) {
++		return true;
++	}
++	su.hci = ml_io_map(E1S_UFS_HCI_PA, E1S_UFS_HCI_SIZE);
++	su.sqd = ml_io_map(E1S_UFS_SQD_PA, E1S_UFS_SQD_SIZE);
++	if (su.hci == 0 || su.sqd == 0) {
++		printf("e1s-ufs: cannot map the UFS registers\n");
++		return false;
++	}
++	su.cap = hci_rd(HCI_CAP);
++	su.mapped = true;
++	return true;
++}
++
++void
++e1s_ufs_probe(void)
++{
++	uint32_t enabled = 1, probe = 1;
++
++	if (PE_parse_boot_argn("e1sufs", &enabled, sizeof(enabled)) && enabled == 0) {
++		printf("e1s-ufs: disabled (e1sufs=0)\n");
++		return;
++	}
++	if (PE_parse_boot_argn("e1sufs_probe", &probe, sizeof(probe)) && probe == 0) {
++		return;
++	}
++	if (!e1s_ufs_map()) {
++		return;
++	}
++
++	uint32_t hcs = hci_rd(HCI_HCS);
++	uint32_t hce = hci_rd(HCI_HCE);
++	uint32_t mem = hci_rd(HCI_MEM_CFG);
++	printf("e1s-ufs: cap %08x (slots %u, 64-bit %u, mcq %u) ver %08x hcs %08x hce %08x\n",
++	    su.cap, (su.cap & CAP_SLOTS_MASK) + 1, !!(su.cap & CAP_64_ADDRESSING),
++	    !!(su.cap & CAP_MCQ_SUPPORT), hci_rd(HCI_VERSION), hcs, hce);
++	printf("e1s-ufs: mem-cfg %08x mcq-cap %08x; %s mode at handoff\n",
++	    mem, hci_rd(HCI_MCQCAP), (mem & MEM_CFG_MCQ) ? "MCQ" : "legacy");
++	printf("e1s-ufs: legacy list %08x:%08x doorbell %08x run %08x ready %u\n",
++	    hci_rd(HCI_UTRLBAU), hci_rd(HCI_UTRLBA), hci_rd(HCI_UTRLDBR),
++	    hci_rd(HCI_UTRLRSR), !!(hcs & HCS_UTRL_READY));
++	if (!(hce & HCE_ENABLE)) {
++		printf("e1s-ufs: controller disabled at handoff; queue state not read\n");
++		return;
++	}
++	printf("e1s-ufs: mcq0 sq %08x:%08x attr %08x sqhd %u sqtl %u cq %08x:%08x attr %08x cqhd %u cqtl %u\n",
++	    hci_rd(HCI_MCQ_BASE + MCQ_SQUBA), hci_rd(HCI_MCQ_BASE + MCQ_SQLBA),
++	    hci_rd(HCI_MCQ_BASE + MCQ_SQATTR),
++	    sqd_rd(SQD_SQHP) / sizeof(struct e1s_utrd), sqd_rd(SQD_SQTP) / sizeof(struct e1s_utrd),
++	    hci_rd(HCI_MCQ_BASE + MCQ_CQUBA), hci_rd(HCI_MCQ_BASE + MCQ_CQLBA),
++	    hci_rd(HCI_MCQ_BASE + MCQ_CQATTR),
++	    sqd_rd(SQD_CQHP) / sizeof(struct e1s_cqe), sqd_rd(SQD_CQTP) / sizeof(struct e1s_cqe));
++}
++
++static int
++e1s_ufs_wait_clear(uint32_t (*read)(uint32_t), uint32_t off, uint32_t mask)
++{
++	uint64_t deadline;
++
++	nanoseconds_to_absolutetime(E1S_UFS_CMD_TIMEOUT_NS, &deadline);
++	deadline += mach_absolute_time();
++	while (read(off) & mask) {
++		if (mach_absolute_time() > deadline) {
++			return ETIMEDOUT;
++		}
++		delay(1);
++	}
++	return 0;
++}
++
++static int
++e1s_ufs_wait_set(uint32_t (*read)(uint32_t), uint32_t off, uint32_t mask)
++{
++	uint64_t deadline;
++
++	nanoseconds_to_absolutetime(E1S_UFS_CMD_TIMEOUT_NS, &deadline);
++	deadline += mach_absolute_time();
++	while (!(read(off) & mask)) {
++		if (mach_absolute_time() > deadline) {
++			return ETIMEDOUT;
++		}
++		delay(1);
++	}
++	return 0;
++}
++
++static int
++e1s_ufs_legacy_init(void)
++{
++	uint32_t hcs = hci_rd(HCI_HCS);
++	uint64_t deadline;
++
++	if (!(hci_rd(HCI_HCE) & HCE_ENABLE) || !(hcs & HCS_DEVICE_PRESENT)) {
++		printf("e1s-ufs: host not enabled (hce %08x hcs %08x)\n", hci_rd(HCI_HCE), hcs);
++		return ENXIO;
++	}
++	/* Polled operation from here on. */
++	hci_wr(HCI_IE, 0);
++	hci_wr(HCI_IS, hci_rd(HCI_IS));
++
++	/* Leaving MCQ mode may take a moment before the legacy list appears. */
++	nanoseconds_to_absolutetime(100 * NSEC_PER_MSEC, &deadline);
++	deadline += mach_absolute_time();
++	while (!(hcs & HCS_UTRL_READY) && mach_absolute_time() < deadline) {
++		delay(1);
++		hcs = hci_rd(HCI_HCS);
++	}
++	if (!(hcs & HCS_UTRL_READY)) {
++		printf("e1s-ufs: legacy list not ready (hcs %08x)\n", hcs);
++		return ENXIO;
++	}
++
++	/* The bootloader's requests must be finished before its list is replaced. */
++	if (e1s_ufs_wait_clear(hci_rd, HCI_UTRLDBR, 0xffffffffU) != 0) {
++		printf("e1s-ufs: bootloader requests are still in flight (doorbell %08x)\n",
++		    hci_rd(HCI_UTRLDBR));
++		return EBUSY;
++	}
++
++	hci_wr(HCI_UTRLRSR, 0);
++	if (e1s_ufs_wait_clear(hci_rd, HCI_HCS, HCS_UTRL_READY) != 0) {
++		printf("e1s-ufs: the legacy list did not stop (hcs %08x)\n", hci_rd(HCI_HCS));
++		return EIO;
++	}
++
++	uint64_t list = su.dma_pa + DMA_SQ;
++	hci_wr(HCI_UTRLBA, (uint32_t)list);
++	hci_wr(HCI_UTRLBAU, (uint32_t)(list >> 32));
++	__builtin_arm_dsb(0xf);
++	hci_wr(HCI_UTRLRSR, 1);
++	if (e1s_ufs_wait_set(hci_rd, HCI_HCS, HCS_UTRL_READY) != 0 ||
++	    hci_rd(HCI_UTRLBA) != (uint32_t)list ||
++	    hci_rd(HCI_UTRLBAU) != (uint32_t)(list >> 32)) {
++		printf("e1s-ufs: the host did not take our legacy list (hcs %08x)\n",
++		    hci_rd(HCI_HCS));
++		return EIO;
++	}
++	su.mcq = false;
++	return 0;
++}
++
++static int
++e1s_ufs_mcq_init(void)
++{
++	uint32_t hcs = hci_rd(HCI_HCS);
++	uint32_t cfg = HCI_MCQ_BASE;
++
++	if (!(hci_rd(HCI_HCE) & HCE_ENABLE) || !(hcs & HCS_DEVICE_PRESENT)) {
++		printf("e1s-ufs: host not enabled (hce %08x hcs %08x)\n", hci_rd(HCI_HCE), hcs);
++		return ENXIO;
++	}
++	if (!(su.cap & CAP_MCQ_SUPPORT)) {
++		printf("e1s-ufs: the controller does not advertise MCQ\n");
++		return ENXIO;
++	}
++
++	/* Samsung's driver selects the multi-circular queue layout here. */
++	hci_wr(HCI_MCQ_MULTI_CIRCULAR, 1);
++
++	/* Polled operation from here on. */
++	hci_wr(HCI_IE, 0);
++	hci_wr(HCI_IS, hci_rd(HCI_IS));
++
++	/*
++	 * Queue 0 is the queue Samsung's driver uses for device commands.
++	 * If the bootloader left it running, stop it and disable it before
++	 * replacing its rings.  Other queues are left alone: this kernel
++	 * only ever posts to queue 0.
++	 */
++	sqd_wr(SQD_SQRTC, SQD_RTC_STOP);
++	if (e1s_ufs_wait_set(sqd_rd, SQD_SQRTS, SQD_RTS_STOPPED) != 0) {
++		printf("e1s-ufs: MCQ queue 0 did not stop (rts %08x)\n", sqd_rd(SQD_SQRTS));
++		return EIO;
++	}
++	hci_wr(cfg + MCQ_SQATTR, hci_rd(cfg + MCQ_SQATTR) & ~MCQ_QUEUE_ENABLE);
++	hci_wr(cfg + MCQ_CQATTR, hci_rd(cfg + MCQ_CQATTR) & ~MCQ_QUEUE_ENABLE);
++	__builtin_arm_dsb(0xf);
++
++	uint32_t entries = su.entries;
++	uint32_t qsize = MCQ_QUEUE_SIZE(entries);
++	uint64_t sq = su.dma_pa + DMA_SQ;
++	uint64_t cq = su.dma_pa + DMA_CQ;
++
++	/*
++	 * MAC is the maximum number of active commands, zero based.  The
++	 * queue arrays hold twice the controller's transfer-slot count, so
++	 * the controller's slot count is entries / 2.
++	 */
++	hci_wr(HCI_MCQ_CFG, (hci_rd(HCI_MCQ_CFG) & ~MCQ_CFG_MAC_MASK) |
++	    (((entries / 2) - 1) << 8));
++
++	hci_wr(cfg + MCQ_SQLBA, (uint32_t)sq);
++	hci_wr(cfg + MCQ_SQUBA, (uint32_t)(sq >> 32));
++	hci_wr(cfg + MCQ_SQDAO, SQD_OFFSET_SQ);
++	hci_wr(cfg + MCQ_SQISAO, SQD_OFFSET_SQIS);
++	hci_wr(cfg + MCQ_CQLBA, (uint32_t)cq);
++	hci_wr(cfg + MCQ_CQUBA, (uint32_t)(cq >> 32));
++	hci_wr(cfg + MCQ_CQDAO, SQD_OFFSET_CQ);
++	hci_wr(cfg + MCQ_CQISAO, SQD_OFFSET_CQIS);
++	hci_wr(cfg + MCQ_CQATTR, MCQ_QUEUE_ENABLE | qsize);
++	hci_wr(cfg + MCQ_SQATTR, MCQ_QUEUE_ENABLE | qsize);
++	__builtin_arm_dsb(0xf);
++
++	/*
++	 * If this is a forced switch from the bootloader's legacy list,
++	 * quiesce that list before selecting MCQ mode.
++	 */
++	uint32_t mem = hci_rd(HCI_MEM_CFG);
++	if (!(mem & MEM_CFG_MCQ)) {
++		if (hci_rd(HCI_HCS) & HCS_UTRL_READY) {
++			if (e1s_ufs_wait_clear(hci_rd, HCI_UTRLDBR, 0xffffffffU) != 0) {
++				printf("e1s-ufs: legacy requests still in flight; not switching to MCQ\n");
++				return EBUSY;
++			}
++			hci_wr(HCI_UTRLRSR, 0);
++			if (e1s_ufs_wait_clear(hci_rd, HCI_HCS, HCS_UTRL_READY) != 0) {
++				printf("e1s-ufs: the legacy list did not stop for the MCQ switch\n");
++				return EIO;
++			}
++		}
++		hci_wr(HCI_MEM_CFG, mem | MEM_CFG_MCQ);
++		__builtin_arm_dsb(0xf);
++	}
++
++	/*
++	 * The queue is enabled but stopped, so the controller does not look
++	 * at the ring yet.  Align the host's tail/head with the controller's
++	 * current indices, then start it.
++	 */
++	uint32_t sq_head = sqd_rd(SQD_SQHP) / sizeof(struct e1s_utrd);
++	uint32_t cq_tail = sqd_rd(SQD_CQTP) / sizeof(struct e1s_cqe);
++	if (sq_head >= entries || cq_tail >= entries) {
++		printf("e1s-ufs: MCQ queue pointers out of range (head %u tail %u entries %u)\n",
++		    sq_head, cq_tail, entries);
++		return EIO;
++	}
++	su.sq_tail = sq_head;
++	su.cq_head = cq_tail;
++	sqd_wr(SQD_SQTP, su.sq_tail * sizeof(struct e1s_utrd));
++	sqd_wr(SQD_CQHP, su.cq_head * sizeof(struct e1s_cqe));
++	if (sqd_rd(SQD_SQTP) != su.sq_tail * sizeof(struct e1s_utrd) ||
++	    sqd_rd(SQD_CQHP) != su.cq_head * sizeof(struct e1s_cqe)) {
++		printf("e1s-ufs: MCQ queue pointers did not take our values\n");
++		return EIO;
++	}
++	__builtin_arm_dsb(0xf);
++
++	sqd_wr(SQD_SQRTC, SQD_RTC_START);
++	if (e1s_ufs_wait_clear(sqd_rd, SQD_SQRTS, SQD_RTS_STOPPED) != 0) {
++		printf("e1s-ufs: MCQ queue 0 did not start (rts %08x)\n", sqd_rd(SQD_SQRTS));
++		return EIO;
++	}
++
++	su.mcq = true;
++	printf("e1s-ufs: MCQ queue 0 ready, %u entries, head %u, cq %u\n",
++	    entries, su.sq_tail, su.cq_head);
++	return 0;
++}
++
++static int
++e1s_ufs_host_init(void)
++{
++	uint32_t mem = hci_rd(HCI_MEM_CFG);
++	uint32_t force_mcq = 0, force_legacy = 0;
++
++	PE_parse_boot_argn("e1sufs_mcq", &force_mcq, sizeof(force_mcq));
++	PE_parse_boot_argn("e1sufs_legacy", &force_legacy, sizeof(force_legacy));
++	if (force_mcq && force_legacy) {
++		printf("e1s-ufs: e1sufs_mcq and e1sufs_legacy are both set\n");
++		return EINVAL;
++	}
++
++	if (force_legacy) {
++		printf("e1s-ufs: legacy mode forced\n");
++		if (mem & MEM_CFG_MCQ) {
++			sqd_wr(SQD_SQRTC, SQD_RTC_STOP);
++			if (e1s_ufs_wait_set(sqd_rd, SQD_SQRTS, SQD_RTS_STOPPED) != 0) {
++				printf("e1s-ufs: MCQ queue 0 did not stop for the legacy switch\n");
++				return EIO;
++			}
++			hci_wr(HCI_MEM_CFG, mem & ~MEM_CFG_MCQ);
++			__builtin_arm_dsb(0xf);
++		}
++		return e1s_ufs_legacy_init();
++	}
++	if (force_mcq || (mem & MEM_CFG_MCQ)) {
++		return e1s_ufs_mcq_init();
++	}
++	if (hci_rd(HCI_HCS) & HCS_UTRL_READY) {
++		printf("e1s-ufs: legacy mode inherited from the bootloader\n");
++		return e1s_ufs_legacy_init();
++	}
++	return e1s_ufs_mcq_init();
++}
++
++static void
++e1s_ufs_build_command(struct e1s_utrd *utrd, struct e1s_ucd *ucd,
++    const uint8_t *cdb, uint32_t cdb_len, uint32_t len)
++{
++	uint64_t ucd_pa = su.dma_pa + DMA_UCD;
++	uint64_t bounce_pa = su.dma_pa + DMA_BOUNCE;
++
++	bzero(utrd, sizeof(*utrd));
++	bzero(ucd, sizeof(*ucd));
++
++	ucd->cmd[0] = 0x01;                     /* COMMAND UPIU */
++	ucd->cmd[1] = len ? 0x40 : 0x00;        /* R: device-to-host data */
++	ucd->cmd[2] = su.lun;
++	ucd->cmd[3] = ++su.tag;
++	ucd->cmd[12] = (uint8_t)(len >> 24);
++	ucd->cmd[13] = (uint8_t)(len >> 16);
++	ucd->cmd[14] = (uint8_t)(len >> 8);
++	ucd->cmd[15] = (uint8_t)len;
++	memcpy(&ucd->cmd[16], cdb, cdb_len);
++
++	/*
++	 * UTRD dword 0: command type 1 (UFS storage, what a UFS 2.0+ host
++	 * uses for SCSI CDBs), data direction 2 (device to host) for reads,
++	 * and the completion interrupt bit.  The controller overwrites the
++	 * overall command status in dword 2.
++	 */
++	utrd->dw0 = (1U << 28) | ((len ? 2U : 0U) << 25) | (1U << 24);
++	utrd->dw2 = 0x0f;                       /* OCS invalid until updated */
++	utrd->ucdba = (uint32_t)ucd_pa;
++	utrd->ucdbau = (uint32_t)(ucd_pa >> 32);
++	utrd->resp = (512U / 4) << 16 | (512U / 4);
++	if (len != 0) {
++		uint32_t n = 0;
++		for (uint32_t done = 0; done < len; done += E1S_UFS_PRDT_CHUNK, n++) {
++			uint32_t chunk = MIN(E1S_UFS_PRDT_CHUNK, len - done);
++			ucd->prdt[n].addr_lo = (uint32_t)(bounce_pa + done);
++			ucd->prdt[n].addr_hi = (uint32_t)((bounce_pa + done) >> 32);
++			ucd->prdt[n].dbc = chunk - 1;
++		}
++		utrd->prdt = (1024U / 4) << 16 | n;
++	}
++}
++
++static int
++e1s_ufs_command(const uint8_t *cdb, uint32_t cdb_len, uint32_t len)
++{
++	struct e1s_utrd *utrd;
++	struct e1s_ucd *ucd = (struct e1s_ucd *)(su.dma + DMA_UCD);
++	uint64_t deadline;
++	uint32_t ocs;
++
++	if (su.mcq) {
++		utrd = (struct e1s_utrd *)(su.dma + DMA_SQ) + su.sq_tail;
++	} else {
++		utrd = (struct e1s_utrd *)(su.dma + DMA_SQ);
++	}
++	e1s_ufs_build_command(utrd, ucd, cdb, cdb_len, len);
++
++	e1s_ufs_dma_sync(DMA_SQ, sizeof(struct e1s_utrd) * su.entries);
++	e1s_ufs_dma_sync(DMA_CQ, sizeof(struct e1s_cqe) * su.entries);
++	e1s_ufs_dma_sync(DMA_UCD, sizeof(*ucd));
++	if (len != 0) {
++		e1s_ufs_dma_sync(DMA_BOUNCE, len);
++	}
++	__builtin_arm_dsb(0xf);
++
++	if (su.mcq) {
++		su.sq_tail = (su.sq_tail + 1) % su.entries;
++		sqd_wr(SQD_SQTP, su.sq_tail * sizeof(struct e1s_utrd));
++	} else {
++		hci_wr(HCI_UTRLDBR, 1);
++	}
++
++	nanoseconds_to_absolutetime(E1S_UFS_CMD_TIMEOUT_NS, &deadline);
++	deadline += mach_absolute_time();
++
++	if (su.mcq) {
++		for (;;) {
++			uint32_t tail = sqd_rd(SQD_CQTP) / sizeof(struct e1s_cqe);
++			if (tail != su.cq_head) {
++				break;
++			}
++			if (mach_absolute_time() > deadline) {
++				printf("e1s-ufs: MCQ command 0x%02x timed out\n", cdb[0]);
++				return ETIMEDOUT;
++			}
++			delay(1);
++		}
++		e1s_ufs_dma_sync(DMA_CQ + su.cq_head * sizeof(struct e1s_cqe),
++		    sizeof(struct e1s_cqe));
++		struct e1s_cqe *cqe = (struct e1s_cqe *)(su.dma + DMA_CQ) + su.cq_head;
++		ocs = cqe->status & 0x0f;
++		su.cq_head = (su.cq_head + 1) % su.entries;
++		sqd_wr(SQD_CQHP, su.cq_head * sizeof(struct e1s_cqe));
++	} else {
++		while (hci_rd(HCI_UTRLDBR) & 1) {
++			if (mach_absolute_time() > deadline) {
++				hci_wr(HCI_UTRLCLR, ~1U);
++				printf("e1s-ufs: legacy command 0x%02x timed out\n", cdb[0]);
++				return ETIMEDOUT;
++			}
++			delay(1);
++		}
++		e1s_ufs_dma_sync(DMA_SQ, sizeof(struct e1s_utrd) * su.entries);
++		ocs = utrd->dw2 & 0xff;
++	}
++
++	__builtin_arm_dsb(0xf);
++	hci_wr(HCI_IS, hci_rd(HCI_IS));
++	e1s_ufs_dma_sync(DMA_UCD, sizeof(*ucd));
++	if (len != 0) {
++		e1s_ufs_dma_sync(DMA_BOUNCE, len);
++	}
++
++	if (ocs != 0) {
++		printf("e1s-ufs: command 0x%02x failed: OCS 0x%x\n", cdb[0], ocs);
++		return EIO;
++	}
++	if (ucd->resp[0] != 0x21) {
++		printf("e1s-ufs: command 0x%02x: response UPIU type 0x%02x\n", cdb[0], ucd->resp[0]);
++		return EIO;
++	}
++	if (ucd->resp[6] != 0 || ucd->resp[7] != 0) {
++		printf("e1s-ufs: command 0x%02x: status 0x%02x flags 0x%02x\n",
++		    cdb[0], ucd->resp[6], ucd->resp[7]);
++		return EIO;
++	}
++	return 0;
++}
++
++/* Retry a command that may hit the device's initial unit attention. */
++static int
++e1s_ufs_command_retry(const uint8_t *cdb, uint32_t cdb_len, uint32_t len)
++{
++	int error = EIO;
++
++	for (int i = 0; i < 3; i++) {
++		error = e1s_ufs_command(cdb, cdb_len, len);
++		if (error == 0) {
++			break;
++		}
++		delay(20);
++	}
++	return error;
++}
++
++static int
++e1s_ufs_read_capacity(void)
++{
++	uint8_t cdb[10] = { 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; /* READ CAPACITY(10) */
++	uint8_t *data = (uint8_t *)(su.dma + DMA_BOUNCE);
++	int error = e1s_ufs_command_retry(cdb, sizeof(cdb), 8);
++
++	if (error) {
++		return error;
++	}
++	uint32_t last = (uint32_t)data[0] << 24 | (uint32_t)data[1] << 16 |
++	    (uint32_t)data[2] << 8 | data[3];
++	uint32_t block = (uint32_t)data[4] << 24 | (uint32_t)data[5] << 16 |
++	    (uint32_t)data[6] << 8 | data[7];
++
++	if (block != 512 && block != 4096) {
++		printf("e1s-ufs: unsupported logical block size %u\n", block);
++		return ENXIO;
++	}
++	if (last == 0) {
++		printf("e1s-ufs: READ CAPACITY returned no blocks\n");
++		return ENXIO;
++	}
++	su.dev_block = block;
++	printf("e1s-ufs: LUN %u: %u blocks of %u bytes (%llu MiB)\n", su.lun,
++	    last + 1, block, ((uint64_t)last + 1) * block >> 20);
++	return 0;
++}
++
++/* READ(10) of count device blocks at lba into the bounce buffer. */
++static int
++e1s_ufs_read_blocks(uint64_t lba, uint32_t count)
++{
++	if (lba > UINT32_MAX || count > E1S_UFS_BOUNCE / su.dev_block) {
++		return EINVAL;
++	}
++	uint8_t cdb[10] = {
++		0x28, 0,
++		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
++		0, (uint8_t)(count >> 8), (uint8_t)count, 0
++	};
++	return e1s_ufs_command_retry(cdb, sizeof(cdb), count * su.dev_block);
++}
++
++static bool
++e1s_ufs_name_equal(const char *a, const char *b)
++{
++	while (*a && *b) {
++		char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + ('a' - 'A')) : *a;
++		char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + ('a' - 'A')) : *b;
++
++		if (ca != cb) {
++			return false;
++		}
++		a++;
++		b++;
++	}
++	return *a == 0 && *b == 0;
++}
++
++static int
++e1s_ufs_find_partition(const char *want)
++{
++	uint8_t *b = (uint8_t *)(su.dma + DMA_BOUNCE);
++	int error = e1s_ufs_read_blocks(1, 1);
++
++	if (error) {
++		return error;
++	}
++	if (memcmp(b, "EFI PART", 8) != 0) {
++		printf("e1s-ufs: LUN %u has no GPT at block 1\n", su.lun);
++		return ENXIO;
++	}
++
++	uint64_t entry_lba;
++	uint32_t nent, esz;
++	memcpy(&entry_lba, b + 72, 8);
++	memcpy(&nent, b + 80, 4);
++	memcpy(&esz, b + 84, 4);
++	if (esz != 128 || nent == 0 || nent > E1S_UFS_BOUNCE / 128) {
++		printf("e1s-ufs: unsupported GPT entries %u x %u\n", nent, esz);
++		return ENXIO;
++	}
++
++	error = e1s_ufs_read_blocks(entry_lba,
++	    (nent * esz + su.dev_block - 1) / su.dev_block);
++	if (error) {
++		return error;
++	}
++	for (uint32_t i = 0; i < nent; i++) {
++		const uint8_t *e = b + i * esz;
++		char name[37];
++		unsigned c;
++
++		for (c = 0; c < 36; c++) {
++			uint16_t ch = (uint16_t)(e[56 + 2 * c] | e[57 + 2 * c] << 8);
++			if (ch == 0 || ch == 0xffff) {
++				break;
++			}
++			name[c] = (char)ch;
++		}
++		name[c] = 0;
++		if (!e1s_ufs_name_equal(name, want)) {
++			continue;
++		}
++		uint64_t first, last;
++		memcpy(&first, e + 32, 8);
++		memcpy(&last, e + 40, 8);
++		if (last < first) {
++			return ENXIO;
++		}
++		su.first_block = first;
++		su.nblocks = last - first + 1;
++		return 0;
++	}
++	printf("e1s-ufs: no GPT partition named \"%s\"\n", want);
++	return ENOENT;
++}
++
++static int
++e1s_ufs_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
++{
++	if (!su.ready) {
++		return ENXIO;
++	}
++	return (flags & FWRITE) ? EROFS : 0;
++}
++
++static int
++e1s_ufs_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unused struct proc *p)
++{
++	return 0;
++}
++
++static void
++e1s_ufs_strategy(buf_t bp)
++{
++	int error = 0;
++	caddr_t vaddr = NULL;
++	uint64_t off = (uint64_t)buf_blkno(bp) * su.secsize;
++	uint32_t count = buf_count(bp);
++	uint64_t part_bytes = su.nblocks * su.dev_block;
++
++	buf_setresid(bp, count);
++	if (!(buf_flags(bp) & B_READ)) {
++		error = EROFS;
++		goto done;
++	}
++	if (off > part_bytes || count > part_bytes - off) {
++		error = EINVAL;
++		goto done;
++	}
++	if (count == 0) {
++		goto done;
++	}
++	if (buf_map(bp, &vaddr)) {
++		error = EIO;
++		goto done;
++	}
++
++	lck_mtx_lock(&e1s_ufs_lock);
++	for (uint32_t done = 0; done < count;) {
++		uint64_t pos = off + done;
++		uint64_t lba = pos / su.dev_block;
++		uint32_t skip = (uint32_t)(pos % su.dev_block);
++		uint32_t want = MIN(count - done, E1S_UFS_BOUNCE - skip);
++		uint32_t blocks = (skip + want + su.dev_block - 1) / su.dev_block;
++
++		error = e1s_ufs_read_blocks(su.first_block + lba, blocks);
++		if (error) {
++			break;
++		}
++		memcpy(vaddr + done, (const void *)(su.dma + DMA_BOUNCE + skip), want);
++		done += want;
++		buf_setresid(bp, count - done);
++	}
++	lck_mtx_unlock(&e1s_ufs_lock);
++	buf_unmap(bp);
++
++done:
++	if (error) {
++		buf_seterror(bp, error);
++	}
++	buf_biodone(bp);
++}
++
++static int
++e1s_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
++    __unused struct proc *p, int is_char)
++{
++	uint32_t *f = (uint32_t *)data;
++	uint64_t *o = (uint64_t *)data;
++
++	switch (cmd) {
++	case DKIOCGETBLOCKSIZE:
++		*f = su.secsize;
++		return 0;
++	case DKIOCSETBLOCKSIZE:
++		if (is_char) {
++			return ENODEV;
++		}
++		if (*f < DEV_BSIZE || *f > su.dev_block || (*f & (*f - 1))) {
++			return EINVAL;
++		}
++		su.secsize = *f;
++		return 0;
++	case DKIOCGETPHYSICALBLOCKSIZE:
++		*f = su.dev_block;
++		return 0;
++	case DKIOCGETBLOCKCOUNT:
++		*o = su.nblocks * su.dev_block / su.secsize;
++		return 0;
++	case DKIOCISWRITABLE:
++		*f = 0;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTREAD:
++		*o = E1S_UFS_BOUNCE / su.secsize;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTWRITE:
++		*o = 0;
++		return 0;
++	case DKIOCGETMAXSEGMENTCOUNTREAD:
++	case DKIOCGETMAXSEGMENTCOUNTWRITE:
++		*o = 1;
++		return 0;
++	default:
++		return ENOTTY;
++	}
++}
++
++static int
++e1s_ufs_bioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return e1s_ufs_ioctl(dev, cmd, data, flag, p, 0);
++}
++
++static int
++e1s_ufs_cioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return e1s_ufs_ioctl(dev, cmd, data, flag, p, 1);
++}
++
++static int
++e1s_ufs_psize(__unused dev_t dev)
++{
++	return su.ready ? (int)MIN(su.nblocks * su.dev_block / su.secsize, INT_MAX) : -1;
++}
++
++static int
++e1s_ufs_read(dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	return physio(e1s_ufs_strategy, NULL, dev, B_READ, minphys, uio, (int)su.secsize);
++}
++
++static int
++e1s_ufs_write(__unused dev_t dev, __unused struct uio *uio, __unused int ioflag)
++{
++	return EROFS;
++}
++
++static const struct bdevsw e1s_ufs_bdevsw = {
++	.d_open     = e1s_ufs_open,
++	.d_close    = e1s_ufs_close,
++	.d_strategy = e1s_ufs_strategy,
++	.d_ioctl    = e1s_ufs_bioctl,
++	.d_dump     = eno_dump,
++	.d_psize    = e1s_ufs_psize,
++	.d_type     = D_DISK,
++};
++
++static const struct cdevsw e1s_ufs_cdevsw = {
++	.d_open       = e1s_ufs_open,
++	.d_close      = e1s_ufs_close,
++	.d_read       = e1s_ufs_read,
++	.d_write      = e1s_ufs_write,
++	.d_ioctl      = e1s_ufs_cioctl,
++	.d_stop       = eno_stop,
++	.d_reset      = eno_reset,
++	.d_ttys       = NULL,
++	.d_select     = eno_select,
++	.d_mmap       = eno_mmap,
++	.d_strategy   = eno_strat,
++	.d_reserved_1 = eno_getc,
++	.d_reserved_2 = eno_putc,
++	.d_type       = D_DISK,
++};
++
++static int
++e1s_ufs_init(void)
++{
++	char want[64] = "userdata";
++	uint32_t lun = 0, enabled = 1;
++	int error;
++
++	if (su.ready) {
++		return 0;
++	}
++	if (PE_parse_boot_argn("e1sufs", &enabled, sizeof(enabled)) && enabled == 0) {
++		printf("e1s-ufs: disabled (e1sufs=0)\n");
++		return ENXIO;
++	}
++	if (!e1s_ufs_map()) {
++		return ENXIO;
++	}
++
++	PE_parse_boot_argn("ufsroot", want, sizeof(want));
++	PE_parse_boot_argn("ufs_lun", &lun, sizeof(lun));
++	if (lun > 7) {
++		printf("e1s-ufs: ufs_lun=%u is out of range\n", lun);
++		return EINVAL;
++	}
++	su.lun = (uint8_t)lun;
++	/*
++	 * Samsung's driver allocates twice the advertised number of transfer
++	 * slots for the MCQ queues (a controller erratum).  Match that layout.
++	 */
++	uint32_t slots = (su.cap & CAP_SLOTS_MASK) + 1U;
++	su.entries = MIN(E1S_UFS_MAX_ENTRIES, slots * 2U);
++	if (su.entries < 2) {
++		su.entries = 2;
++	}
++
++	/*
++	 * The controller is 64-bit capable on this SoC, but keep the
++	 * descriptors below 4 GiB when it is not, and let the allocator use
++	 * the whole RAM window otherwise (the loader may place that window
++	 * above 4 GiB).
++	 */
++	ppnum_t max_pnum = (su.cap & CAP_64_ADDRESSING) ? 0 : 0xfffff;
++	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, max_pnum, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		printf("e1s-ufs: no contiguous DMA memory\n");
++		return ENOMEM;
++	}
++	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)su.dma);
++	if (pn == 0) {
++		printf("e1s-ufs: no physical address for the DMA allocation\n");
++		return ENOMEM;
++	}
++	su.dma_pa = ptoa_64(pn);
++	su.secsize = DEV_BSIZE;
++
++	lck_mtx_lock(&e1s_ufs_lock);
++	error = e1s_ufs_host_init();
++	if (error == 0) {
++		/* The first command after the bootloader may report unit attention. */
++		static const uint8_t tur[6] = { 0x00 };
++		error = e1s_ufs_command_retry(tur, sizeof(tur), 0);
++	}
++	if (error == 0) {
++		error = e1s_ufs_read_capacity();
++	}
++	if (error == 0) {
++		error = e1s_ufs_find_partition(want);
++	}
++	lck_mtx_unlock(&e1s_ufs_lock);
++	if (error) {
++		printf("e1s-ufs: init failed: %d\n", error);
++		return error;
++	}
++
++	su.bmajor = bdevsw_add(-1, &e1s_ufs_bdevsw);
++	if (su.bmajor < 0) {
++		return ENXIO;
++	}
++	su.cmajor = cdevsw_add_with_bdev(-1, &e1s_ufs_cdevsw, su.bmajor);
++	if (su.cmajor < 0) {
++		return ENXIO;
++	}
++	su.bdev = makedev(su.bmajor, 0);
++	devfs_make_node(su.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
++	devfs_make_node(makedev(su.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot0");
++	su.ready = true;
++	printf("e1s-ufs: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, read-only\n",
++	    want, su.lun, su.first_block,
++	    (su.nblocks * su.dev_block) >> 20);
++	return 0;
++}
++
++int
++e1s_ufs_rootdev(dev_t *dev)
++{
++	int error = e1s_ufs_init();
++
++	if (error) {
++		return error;
++	}
++	*dev = su.bdev;
++	return 0;
++}
++
++
++
++#endif /* ARM64_BOARD_CONFIG_E1S */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 16cf4fd..ac999f8 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -95,6 +95,10 @@
+ #include <sys/mman.h>
+ #include <sys/kasl.h>
+ 
++#if defined(E1S)
++extern void e1s_ufs_probe(void);
++#endif
++
+ #include <security/audit/audit.h>
+ 
+ #include <sys/malloc.h>
+@@ -984,6 +988,9 @@ bsd_init(void)
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
+ 		redwood_input_init();           /* /dev/redwood-touch */
++#if defined(E1S)
++		e1s_ufs_probe();                /* read-only UFS register summary */
++#endif
+ 		redwood_audio_init();           /* /dev/redwood-audio */
+ 		redwood_virtio_blk_init();      /* /dev/rvblk0, a disk image of the host (QEMU) */
+ 		redwood_sparse_init();          /* /dev/rsp0, part of an image too big to hold */
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index 29978e9..2bd419d 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -784,6 +784,24 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+ 		}
+ 	}
+ 
++#if defined(E1S)
++//
++//	e1s: root on a GPT partition of the internal UFS (bsd/dev/e1s_ufs.c)
++//
++	if (strcmp(rdBootVar, "ufsroot0") == 0) {
++		extern int e1s_ufs_rootdev(dev_t *dev);
++		OSSafeReleaseNULL(matching);
++		int ufs_error = e1s_ufs_rootdev(root);
++		if (ufs_error) {
++			panic("IOFindBSDRoot: e1s UFS root %s unavailable: %d", rdBootVar, ufs_error);
++		}
++		strlcpy(rootName, rdBootVar, rootNameSize);
++		IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
++		*oflags = 0;
++		goto iofrootx;
++	}
++#endif
++
+ //
+ //	Now check if we are trying to root on a memory device
+ //

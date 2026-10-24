@@ -38,6 +38,7 @@ jobs:
           python3 tools/e1s/test_e1s_fdt.py
           python3 tools/e1s/test_e1s_touch.py
           python3 tools/e1s/test_e1s_keys.py
+          python3 tools/e1s/test_e1s_ufs.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |
@@ -46,6 +47,7 @@ jobs:
           test -f "$RUNNER_TEMP/xnu-src/pexpert/pexpert/arm64/E1S.h"
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_touch.c"
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_input.c"
+          test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_ufs.c"
           git -C "$RUNNER_TEMP/xnu-src" diff --stat
 
       - name: Summary

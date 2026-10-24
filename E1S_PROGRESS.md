@@ -454,3 +454,47 @@ pair is not reusable as-is: it depends on a loader mailbox and on UEFI's
 transfer list staying in the controller, which the e1s loader does not
 provide. The e1s driver is being written as a standalone read-only block
 device with host-side tests before any device test.
+
+## 2026-10-25 - 0005 UFS driver builds, still untested
+
+`0005-e1s-ufs.patch` now adds `bsd/dev/e1s_ufs.c` and its registration points:
+
+- A polled, read-only block driver for the S5E9945 UFS 4.0 host at
+  `0x17100000`, with the MCQ configuration block at `0x17100400` and the
+  runtime queue registers in the SQD block at `0x17140000`.
+- It takes over the live host left by S-Boot. If the host is in legacy mode it
+  waits for the bootloader's doorbells, stops the UTRL, replaces its base with
+  a kernel-owned 32-byte UTRD array and restarts it. If the host is in MCQ mode
+  it stops and disables queue 0, programs the queue base/offsets, aligns the
+  head/tail pointers and restarts it. It does not re-run PHY/UNIPRO/CPORT
+  calibration and does not touch the PMIC rails.
+- SCSI TEST UNIT READY, READ CAPACITY(10) and READ(10); GPT partition lookup by
+  name (`userdata` by default, `ufsroot=` override); `/dev/ufsroot0` and
+  `/dev/rufsroot0`; writes return `EROFS`. Root with `rd=ufsroot0`.
+- One 1 MiB contiguous allocation holds the SQ, CQ, UCD/PRDT and bounce
+  buffer; the caches are flushed around each command. Boot arguments:
+  `e1sufs=0`, `e1sufs_probe=0`, `e1sufs_mcq=1`, `e1sufs_legacy=1`,
+  `ufsroot=NAME`, `ufs_lun=N`.
+- `e1s_ufs_probe()` is called from `bsd_init()` and prints the HCI/MCQ register
+  summary. `IOFindBSDRoot` calls `e1s_ufs_rootdev()` only for `rd=ufsroot0`.
+
+The patch applies cleanly on the `0001`-`0003` baseline; `e1s_ufs.c` compiles
+and `mach.development.e1s` links at 16,209,160 bytes. The build still ends in
+the known `check_all_exports` failure after linking. `test_e1s_ufs.py` checks
+the patch's registers, read-only SCSI path, boot arguments and root hooks.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,209,160 | `c89796c11fcff21fbabb4a2432d37182666cc3beaa1ba56679b421985922c786` |
+| `out/e1s-boot-touch.img` | 16,334,864 | `752ee2d1767bc082c0ca423290ddf8728e80b70f6fb37a71fe0bd7430cbf03be` |
+| `out/e1s-boot-touch.img.tar` | 16,343,040 | `b7fe909c32d9189efe28dcb6fb222ab5a5b042eb9b07ee80d149acb392f37d4a` |
+
+The payload is at `0x19000`, the entry is `0xfffffff0074224a8`, there are 10
+segments, the ADT is 16,644 bytes, and the fallback RAM window is
+`0xA0000000+0x20000000`. The command line is still
+`debug=0x14e cpus=1 keepsyms=1 -v`; it deliberately does **not** contain
+`rd=ufsroot0`, so the first XNU test cannot be turned into a UFS root panic.
+No UFS command has run on the phone and no device image has been flashed. No
+screen photo and no `0x91200000` log exist.

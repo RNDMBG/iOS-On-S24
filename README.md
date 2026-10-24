@@ -59,14 +59,16 @@ Checked means the item exists in the repository and passes its host checks.
 - [x] Wrote the EL2/EL1 loader, framebuffer discovery, DTB RAM-window
       selection, ADT patch, and `SWEETXNU` payload handoff (untested).
 - [x] Wrote the e1s volume-up driver and the STM SPI9 touch driver (untested).
+- [x] Wrote a polled, read-only UFS 4.0/MCQ block driver with GPT partition
+      lookup and a `ufsroot0` root hook (untested).
 - [x] Generated an iOS 16.5 D22AP ADT with NVRAM, `/options`, `/pram`, and the
       iPhone X `/product` tree.
 - [x] Added `tools/e1s/verify_boot.py` and host tests for the ADT, FDT parser,
-      keys, and touch protocol.
+      keys, touch protocol, and UFS patch.
 - [ ] First BOOT-only flash and a real screen photo plus `0x91200000` log.
 - [ ] An XNU kernel that has been booted on this phone.
-- [ ] A native UFS 4.0/MCQ root device. The Qualcomm loader-shared driver
-      cannot be reused.
+- [ ] A UFS root device verified on hardware. The driver handles both the
+      bootloader's legacy UTRL list and MCQ queue 0; it has not run yet.
 - [ ] A DECON/DSIM display driver. The first display target is the framebuffer
       S-Boot already set up.
 - [ ] Touch, RTC, power key, battery, and USB verified on hardware.
@@ -101,6 +103,11 @@ builds the real HackiOS base instead of the old SWEET series:
   `gpp9-3` is chip select, and `gpa1-2` is polled as the active-low interrupt.
   The driver speaks Samsung's STM protocol (`0x87` one-event reads, `0x22`
   device ID, `0x23` panel info) and posts to `/dev/redwood-touch`.
+- `xnu/patches-e1s/0005-e1s-ufs.patch`: a polled, read-only UFS 4.0/MCQ block
+  driver. It takes over the live host S-Boot used (legacy UTRL or MCQ queue 0),
+  selects a GPT partition by name and exposes `/dev/ufsroot0`. It is untested;
+  the first image only prints its register summary and does not use
+  `rd=ufsroot0`.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -118,26 +125,27 @@ builds the real HackiOS base instead of the old SWEET series:
 - `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
-  series on Ubuntu, then runs the host ADT/FDT/touch/keys checks. It does not
-  build the kernel.
+  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS checks. It does
+  not build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,
-entry level, framebuffer address, touch power rails, and UFS behaviour still
+entry level, framebuffer address, touch power rails, and UFS command path still
 need measurement on SM-S921B. The RAM window is now taken from the DTB rather
 than hardcoded: e1s's own `s5e9945-rmem.dtsi` puts the modem at
 `0x8_80000000` (`cp_rmem`) and `0x8_90000000` (`cp_rmem1`), so the old
-`0x880000000` assumption would have zeroed firmware memory. The UFS node is a
-probe, not a working root: the S24 host may be in UFS 4.0 MCQ mode instead of
-the legacy UTRL path the SWEET driver uses. The touch controller's LDO18/LDO9
-rails are normally enabled by Android's PMIC driver; the XNU kernel cannot
-reach the ACPM mailbox yet, so touch depends on S-Boot leaving those rails on.
+`0x880000000` assumption would have zeroed firmware memory. The UFS driver
+handles both the bootloader's legacy UTRL list and MCQ queue 0, but it has
+never issued a command on this phone; the first image only prints its register
+summary. The touch controller's LDO18/LDO9 rails are normally enabled by
+Android's PMIC driver; the XNU kernel cannot reach the ACPM mailbox yet, so
+touch depends on S-Boot leaving those rails on.
 
 The work I expect to do, in order:
 
 1. Boot this kernel to the framebuffer console and capture `0x91200000`.
-2. Give the kernel a userland image and a storage path (`RAMDisk` first, then
-   UFS through the loader).
+2. Verify the UFS driver on the phone, then give the kernel a userland image
+   (`RAMDisk` first, then UFS).
 3. Power the touch rails and test the STM driver on the panel.
 4. RTC, buttons, battery, and USB.
 5. Cameras (the HackiOS camera driver is Qualcomm-specific and cannot be
