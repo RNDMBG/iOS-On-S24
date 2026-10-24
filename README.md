@@ -61,14 +61,18 @@ Checked means the item exists in the repository and passes its host checks.
 - [x] Wrote the e1s volume-up driver and the STM SPI9 touch driver (untested).
 - [x] Wrote a polled, read-only UFS 4.0/MCQ block driver with GPT partition
       lookup and a `ufsroot0` root hook (untested).
+- [x] Wrote an opt-in camera presence probe for the four SM-S921B sensors
+      (bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture).
 - [x] Generated an iOS 16.5 D22AP ADT with NVRAM, `/options`, `/pram`, and the
       iPhone X `/product` tree.
 - [x] Added `tools/e1s/verify_boot.py` and host tests for the ADT, FDT parser,
-      keys, touch protocol, and UFS patch.
+      keys, touch protocol, UFS patch, and camera probe.
 - [ ] First BOOT-only flash and a real screen photo plus `0x91200000` log.
 - [ ] An XNU kernel that has been booted on this phone.
 - [ ] A UFS root device verified on hardware. The driver handles both the
       bootloader's legacy UTRL list and MCQ queue 0; it has not run yet.
+- [ ] A camera frame path. The presence probe exists, but the PMIC rails,
+      camera MCLKs, CSIS/PHY capture, ISP, and SMMU are still missing.
 - [ ] A DECON/DSIM display driver. The first display target is the framebuffer
       S-Boot already set up.
 - [ ] Touch, RTC, power key, battery, and USB verified on hardware.
@@ -108,6 +112,11 @@ builds the real HackiOS base instead of the old SWEET series:
   selects a GPT partition by name and exposes `/dev/ufsroot0`. It is untested;
   the first image only prints its register summary and does not use
   `rd=ufsroot0`.
+- `xnu/patches-e1s/0006-e1s-camera.patch`: an opt-in camera presence probe.
+  It knows the four sensors (S5KGN3, S5K3LU, S5K3K1, IMX564), their hsi2c
+  buses, reset/MCLK pads, and CSIS channels. It bit-bangs the sensor I2C bus
+  to read a chip ID and only reads CSIS registers with `e1scam=2`. It does not
+  power the camera rails or start MCLK, and it does not capture frames.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -125,13 +134,14 @@ builds the real HackiOS base instead of the old SWEET series:
 - `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
-  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS checks. It does
-  not build the kernel.
+  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera checks.
+  It does not build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,
-entry level, framebuffer address, touch power rails, and UFS command path still
-need measurement on SM-S921B. The RAM window is now taken from the DTB rather
+entry level, framebuffer address, touch power rails, UFS command path, and
+camera power/MCLK state still need measurement on SM-S921B. The RAM window is
+now taken from the DTB rather
 than hardcoded: e1s's own `s5e9945-rmem.dtsi` puts the modem at
 `0x8_80000000` (`cp_rmem`) and `0x8_90000000` (`cp_rmem1`), so the old
 `0x880000000` assumption would have zeroed firmware memory. The UFS driver
@@ -139,7 +149,9 @@ handles both the bootloader's legacy UTRL list and MCQ queue 0, but it has
 never issued a command on this phone; the first image only prints its register
 summary. The touch controller's LDO18/LDO9 rails are normally enabled by
 Android's PMIC driver; the XNU kernel cannot reach the ACPM mailbox yet, so
-touch depends on S-Boot leaving those rails on.
+touch depends on S-Boot leaving those rails on. The camera probe has the same
+constraint: it can read a sensor ID only if S-Boot left the module rails and
+MCLK on. It does not start either.
 
 The work I expect to do, in order:
 
@@ -148,8 +160,9 @@ The work I expect to do, in order:
    (`RAMDisk` first, then UFS).
 3. Power the touch rails and test the STM driver on the panel.
 4. RTC, buttons, battery, and USB.
-5. Cameras (the HackiOS camera driver is Qualcomm-specific and cannot be
-   reused; an Exynos CSIS/ISP driver is a separate project).
+5. Camera capture. The presence probe is written, but the Qualcomm HackiOS
+   driver cannot be reused; the PMIC rails, camera CMU, CSIS/PHY, ISP, and
+   SMMU path are a separate project.
 
 The iPhone X rootfs, shared cache, and other Apple binaries are not in this
 repo. The root-building scripts expect those files from an IPSW on a Linux

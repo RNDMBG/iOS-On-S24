@@ -498,3 +498,47 @@ segments, the ADT is 16,644 bytes, and the fallback RAM window is
 `rd=ufsroot0`, so the first XNU test cannot be turned into a UFS root panic.
 No UFS command has run on the phone and no device image has been flashed. No
 screen photo and no `0x91200000` log exist.
+
+## 2026-10-25 - 0006 camera presence probe builds, still untested
+
+`0006-e1s-camera.patch` adds `bsd/dev/e1s_camera.c` and the `bsd_init` call.
+It is a presence probe, not a capture driver:
+
+- The four retail SM-S921B modules are described from the e1s camera overlay:
+  S5KGN3 rear wide (hsi2c33, `0x10`, reset `gpc0-0`, MCLK2 `gpg1-2`, CSIS1),
+  S5K3LU front (hsi2c43, `0x10`, reset `gpp4-0`, MCLK0 `gpg1-0`, CSIS0),
+  S5K3K1 rear tele 3x (hsi2c26, `0x2d`, reset `gpc4-1`, MCLK3 `gpg1-3`,
+  CSIS2), and IMX564 rear ultra-wide (hsi2c37, `0x10`, reset `gpc0-1`,
+  MCLK1 `gpg1-1`, CSIS3).
+- It maps the PERIC0/PERIC1/PERIC2 and CMGP pinctrl blocks, prints each
+  sensor's pad state, and with `e1scam=1` bit-bangs the sensor I2C bus at
+  100 kHz to read the chip ID. It tries the DTS SDA/SCL order and the swapped
+  order.
+- `e1scam_reset=1` pulses reset before the ID read; by default the reset is
+  only read. `e1scam=2` also reads `CSIS_VERSION` from CSIS0-3; this is opt-in
+  because the camera power domain is not enabled. `e1scam_bus=NAME` selects
+  one sensor.
+- It does not control any camera rail, start MCLK, program CSIS/PHY lanes, use
+  CSI DMA or the ISP, or expose frames. The PMIC/ACPM rails, camera CMU,
+  `pd_csis`, SMMU, and a userland surface interface are still missing.
+- The probe is off by default. The first test image's command line does not
+  contain `e1scam`, so this code does not run during the display/UFS test.
+
+The patch applies on the `0001`-`0005` baseline; `e1s_camera.c` compiles and
+`mach.development.e1s` links at 16,209,920 bytes. The build still ends in the
+known `check_all_exports` failure after linking. `test_e1s_camera.py` checks
+the sensor wiring, the default-off/read-only behaviour, and the CSIS gate.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,209,920 | `2f3de994ba4c38eb01ad1f2cbe0cd5717cd6cb9cdafb73fd947268dc33a0ac51` |
+| `out/e1s-boot-touch.img` | 16,334,864 | `42651b88f51713d6b1bc8dac1ca7bda13124ef1794f852cea405b640ff078727` |
+| `out/e1s-boot-touch.img.tar` | 16,343,040 | `7bc4e01dcd2f0f91ff763578f11e782227df7a09b42721d63589e1e4ad5630ea` |
+
+The payload is at `0x19000`, the entry is `0xfffffff0074224a8`, there are 10
+segments, the ADT is 16,644 bytes, and the fallback RAM window is
+`0xA0000000+0x20000000`. No camera register has been written on the phone, no
+sensor has been powered, and no image has been flashed. No screen photo and no
+`0x91200000` log exist.

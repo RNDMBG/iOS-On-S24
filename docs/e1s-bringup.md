@@ -21,6 +21,7 @@ probe baseline.
 | Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB only |
 | Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
 | Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
+| Cameras | Qualcomm CSI | Exynos CSIS/ISP, 4 sensors | presence probe, untested |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
 | Buttons | Bixby key | no Bixby; volume-up only | `e1s_input.c`, untested |
 | USB | older USB | e1s USB | none |
@@ -59,12 +60,14 @@ What is e1s-specific so far:
 | Redwood hardware gating, volume-up | `0002` | builds |
 | STM SPI9 touch | `0003` | builds, untested |
 | UFS 4.0/MCQ read-only root | `0005` | builds, untested |
+| Camera presence probe | `0006` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
-Not ported: PMIC/ACPM (including the touch LDOs and the UFS rails), RTC, USB,
-battery, cameras, and any SMP configuration beyond the boot CPU. The UFS driver
-exists but has not been exercised on the phone.
+Not ported: PMIC/ACPM (including the touch LDOs, the UFS rails, and every
+camera rail), camera MCLKs/CSIS capture/ISP, RTC, USB, battery, and any SMP
+configuration beyond the boot CPU. The UFS driver and the camera presence
+probe exist but have not been exercised on the phone.
 
 ## 1. Source facts
 
@@ -79,6 +82,9 @@ Relevant files:
   peripheral includes.
 - `arch/arm64/boot/dts/exynos/s5e9945-cpu.dtsi` - 10 CPU nodes and PSCI.
 - `arch/arm64/boot/dts/exynos/s5e9945-ufs.dtsi` - UFS register blocks.
+- `arch/arm64/boot/dts/exynos/s5e9945-camera.dtsi` and
+  `arch/arm64/boot/dts/samsung/e1s/camera/` - CSIS/ISP blocks and the four
+  sensor modules.
 - `arch/arm64/boot/dts/exynos/s5e9945-rmem.dtsi` - reserved memory.
 - `arch/arm64/boot/dts/exynos/s5e9945-drm-dpu.dtsi` - DECON/DSIM/DPU.
 - `arch/arm64/boot/dts/samsung/s5e9945_common.dtsi` - common board overlay.
@@ -230,6 +236,38 @@ The driver compiles and the patch applies, but **no command has been issued on
 the phone**. The first test image only calls `e1s_ufs_probe()` during
 `bsd_init` to print the HCI/MCQ register state; it does not put `rd=ufsroot0`
 on the command line, so a UFS failure cannot mask the loader/display test.
+
+### Cameras
+
+The e1s camera block is Exynos CSIS/ISP ("Pablo"), not Qualcomm CSI. The retail
+SM-S921B module set from the board DTS is:
+
+| Camera | Part | I2C | Address | Reset | MCLK | CSIS |
+| --- | --- | --- | --- | --- | --- | --- |
+| rear wide | S5KGN3 | hsi2c33 | `0x10` | `gpc0-0` | ch2, `gpg1-2` | 1 (C-PHY) |
+| front | S5K3LU | hsi2c43 | `0x10` | `gpp4-0` | ch0, `gpg1-0` | 0 (C-PHY) |
+| rear tele 3x | S5K3K1 | hsi2c26 | `0x2d` | `gpc4-1` | ch3, `gpg1-3` | 2 (D-PHY) |
+| rear ultra-wide | IMX564 | hsi2c37 | `0x10` | `gpc0-1` | ch1, `gpg1-1` | 3 (C-PHY) |
+
+`0006-e1s-camera.patch` adds `bsd/dev/e1s_camera.c`. It is a presence probe:
+
+- It maps the PERIC0/PERIC1/PERIC2 and CMGP pinctrl blocks and prints the
+  CON/DAT state of each sensor's I2C, reset and MCLK pads.
+- With `e1scam=1`, it bit-bangs the sensor I2C bus (100 kHz, open-drain
+  emulation) and reads the chip ID. It tries the DTS SDA/SCL order and the
+  swapped order, because the order has not been measured.
+- `e1scam_reset=1` pulses the selected sensor's reset; by default the reset is
+  only read, never driven.
+- `e1scam=2` additionally reads `CSIS_VERSION` from CSIS0-3. This is opt-in:
+  the camera power domain is not enabled, and a read of a gated block can hang
+  the interconnect.
+- `e1scam_bus=gn3|3lu|3k1|imx564` limits the probe to one sensor.
+
+It does **not** enable a camera rail, start an MCLK, program CSIS/PHY lanes,
+use CSI DMA or the ISP, or expose a frame device. Those need the PMIC/ACPM
+rails, the camera CMU, `pd_csis`, SMMU mappings, and a userland surface
+interface. The probe is off by default; a first display/UFS test does not run
+it.
 
 ### Display
 
@@ -393,7 +431,7 @@ The first success criterion is not "iOS boots"; it is:
    the early kernel console.
 4. **Root**: mount an HFS+ image from UFS.
 5. **Userland**: launchd/SpringBoard with an iPhone identity.
-6. **Devices**: display, touch, keys, RTC, battery, then radios.
+6. **Devices**: display, touch, keys, RTC, battery, cameras, then radios.
 
 Milestones 3-6 are research projects, not a straight port. The older code is a
 reference, not a drop-in.
@@ -412,6 +450,8 @@ reference, not a drop-in.
   reinitialize PHY/UNIPRO/CPORT and PMIC rails?
 - Does S-Boot leave UFS in legacy UTRL mode or MCQ mode, and does it keep the
   UFS clocks and L8/S4-L5 rails on across the handoff?
+- Does S-Boot leave any camera rail or MCLK on, and which SDA/SCL pin order do
+  the four sensor buses actually use?
 - Which retail DTS revision matches the user's SM-S921B firmware?
 - Does the bootloader accept a boot v4 image with a ramdisk, or is a
   separate recovery/init_boot path required?

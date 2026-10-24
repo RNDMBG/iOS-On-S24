@@ -130,14 +130,19 @@ This build produced:
 This build's SHA-256 values:
 
 - `e1s-boot-touch.img`:
-  `752ee2d1767bc082c0ca423290ddf8728e80b70f6fb37a71fe0bd7430cbf03be`
+  `42651b88f51713d6b1bc8dac1ca7bda13124ef1794f852cea405b640ff078727`
 - `e1s-boot-touch.img.tar`:
-  `b7fe909c32d9189efe28dcb6fb222ab5a5b042eb9b07ee80d149acb392f37d4a`
+  `7bc4e01dcd2f0f91ff763578f11e782227df7a09b42721d63589e1e4ad5630ea`
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with
 `mkadt.py` before the payload is rebuilt; the current ADT fallback is
 `0xA0000000`, not the old `0x880000000`.
+
+This image also contains the `0006` camera presence probe, but the command
+line does not include `e1scam`, so the camera code is not run and no camera
+pad or register is touched. Enable it in a later test build with `e1scam=1`
+(pads/I2C) or `e1scam=2` (also CSIS registers).
 
 ## 4. Flash only BOOT
 
@@ -159,7 +164,7 @@ After the jump, XNU should print its early console and then `bsd_init` calls
 `MEM_CFG` legacy/MCQ mode, and queue 0 state). The first image has no
 `rd=ufsroot0`, so the expected end of this test is a missing-root stop after
 that summary, not iOS boot. The UFS summary is register evidence, not a UFS
-command test.
+command test. The camera probe is not called because `e1scam` is absent.
 
 Photograph the entire screen after at least 60 seconds. Record whether:
 

@@ -261,7 +261,66 @@ both the legacy UTRL list and MCQ queue 0, but it has not been tested on the
 phone. Its first image only prints the register summary at `bsd_init`; it does
 not use `rd=ufsroot0`.
 
-## 8. USB
+## 8. Cameras
+
+From `arch/arm64/boot/dts/exynos/s5e9945-camera.dtsi` and the
+`arch/arm64/boot/dts/samsung/e1s/camera/` overlay (`s5e9945-e1s_camera.dtsi`):
+
+| Region | Address | Size | Source |
+| --- | --- | --- | --- |
+| CSIS0 | `0x1A030000` | `0x1000` | DTS `is_sensor1` overlay (front) |
+| CSIS1 | `0x1A040000` | `0x1000` | DTS `is_sensor0` overlay (wide) |
+| CSIS2 | `0x1A050000` | `0x1000` | DTS `is_sensor2` (tele) |
+| CSIS3 | `0x1A060000` | `0x1000` | DTS `is_sensor4` (ultra-wide) |
+| CSIS4 | `0x1A070000` | `0x1000` | DTS, unused |
+| CSIS5 | `0x1A080000` | `0x1000` | DTS, disabled |
+| CSIS PHY | `0x1A0F0000` | `0x10000` | DTS |
+| CSIS reset sysreg | `0x1A020500` | `0x10` | DTS `sysreg_csis_reset` |
+| CSIS FRO | `0x1A19022C` | `0x10` | DTS |
+| CSIS OTF output mux | `0x1A190254` | `0x10` | DTS |
+| ISP CSTAT0-3 | `0x1A840000`-`0x1A870000` | `0x10000` each | DTS `exynos_is` |
+| ISP LME | `0x28830000` | `0x10000` | DTS `exynos_is` |
+| ISP DLFE | `0x27040000` | `0x10000` | DTS `exynos_is` |
+
+The CSIS register file starts with `CSIS_VERSION` at offset `0x0`. The e1s
+defconfig selects `CONFIG_CSIS_V6_0=y` and `CONFIG_CSIS_PDP_TOP_V6_1=y`
+(`arch/arm64/configs/e1s_defconfig`), so the matching hardware API is
+`is-hw-csi-v6_0`, not the v8.x used by newer SoCs. A register access to a
+gated CSIS block can hang the interconnect, so `0006` reads it only with
+`e1scam=2`.
+
+The four board sensors and their wiring:
+
+| Camera | Part | I2C controller | 7-bit address | Reset | MCLK | CSIS | PHY |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rear wide | S5KGN3 | hsi2c33 (`gpc9-0/1`) | `0x10` | `gpc0-0` | ch2, `gpg1-2`, 19.2 MHz | 1 | C-PHY |
+| front | S5K3LU | hsi2c43 (`gpm8-0/1`) | `0x10` | `gpp4-0` | ch0, `gpg1-0`, 19.2 MHz | 0 | C-PHY |
+| rear tele 3x | S5K3K1 | hsi2c26 (`gpc2-0/1`) | `0x2d` | `gpc4-1` | ch3, `gpg1-3`, 19.2 MHz | 2 | D-PHY |
+| rear ultra-wide | IMX564 | hsi2c37 (`gpm2-0/1`) | `0x10` | `gpc0-1` | ch1, `gpg1-1`, 19.2 MHz | 3 | C-PHY |
+
+The DTS `reg` values are already 7-bit addresses (the comments' "1 bit right
+shift" refers to the 8-bit wire address). The SDA/SCL order is taken from the
+`gpios = <...>` order in each `hsi2c` node; `0006` also tries the swapped order
+because that order has not been measured.
+
+The module rails are all PMIC/ACPM-controlled:
+
+| Camera | Rails named in its power sequence |
+| --- | --- |
+| GN3 | `VDD_WIDECAM_A2P2`, `VDD_WIDECAM_IO_1P8`, `VDD_WIDECAM_PHY_0P92`, `VDD_WIDECAM_0P92`, `VDD_WIDECAM_AF_3P2`, `VDD_WIDECAM_OIS_3P2`, `VDD_WIDE_TELE_OIS_1P8`, `VREG_BB_2P6`, `VDD_EXT_1P2_PB02` |
+| 3LU | `VDD_VTCAM_IO_1P8`, `VDD_VTCAM_A2P2`, `VDD_VTCAM_0P92`, `VDD_VTCAM_AF_2P8`, `VREG_BB_2P6`, `VDD_EXT_1P2_PB02` |
+| 3K1 | `VDD_TELECAM_AF_2P8`, `VDD_TELE_UW_IO_1P8`, `VDD_WIDE_TELE_OIS_1P8`, `VDD_TELECAM_A2P8`, `VDD_TELECAM_OIS_2P8`, `VDD_TELECAM_1P05`, `VDD_EXT_1P2_PB02` |
+| IMX564 | `VDD_UW_AF_3P3`, `VDD_CAMIO_1P8`, `VDD_UWCAM_A2P8`, `VDD_UWCAM_A1P8`, `VDD_UWCAM_1P1` |
+
+The flash/torch is a separate S2MPB02 PMIC on hsi2c36 (torch `gpc1-1`); the
+OIS MCU is at `0x1A310000`, with USI05/USI06 at `0x119D0000`/`0x119E0000`.
+Neither is part of the presence probe.
+
+`0006-e1s-camera.patch` is a presence probe only. It does not enable a rail,
+start MCLK, program the PHY, or capture a frame. The patch passes its host
+test, but no sensor has been powered or read on the phone yet.
+
+## 9. USB
 
 | Block | Address | Source |
 | --- | --- | --- |
@@ -272,7 +331,7 @@ not use `rd=ufsroot0`.
 The controller is DWC3. The e1s board uses a PMIC GPIO for USB connection
 switching. USB is not part of the first key/display milestone.
 
-## 9. Driver implications
+## 10. Driver implications
 
 1. The volume-up driver can be self-contained: map ALIVE, read `0x12850064`
    bit 0 every 20 ms, debounce two consecutive samples, and call
@@ -285,8 +344,12 @@ switching. USB is not part of the first key/display milestone.
    `gpa1-2` interrupt. A read-only chip-ID probe is the sensible first step.
 5. Display can start from the boot framebuffer; DECON/DSIM work is only needed
    once iOS wants to own modes, page flips, or panel power.
+6. Camera capture needs the PMIC rails, the camera CMU/MCLKs, the `pd_csis`
+   power domain, CSIS/PHY lane programming, CSI DMA, the ISP, SMMU mappings,
+   and a userland surface interface. A bus/ID probe is the only safe first
+   step until the rails and MCLKs are controlled.
 
-## 10. Device observations still missing
+## 11. Device observations still missing
 
 - Actual `CurrentEL`, `SCTLR_EL1`, `CNTFRQ_EL0`, `MPIDR_EL1`, and `x0` on S-Boot
   entry.
@@ -295,10 +358,12 @@ switching. USB is not part of the first key/display milestone.
   low when volume-up is held.
 - Whether the touch IRQ/CS lines match the board DTS on the user's revision.
 - Whether UFS is in MCQ mode at handoff and whether the PHY stays initialized.
+- Whether S-Boot leaves any camera rail or MCLK on, and whether a sensor ACKs
+  on the DTS or the swapped SDA/SCL order.
 - Which DRAM banks are free of firmware carve-outs.
 - Whether an EL2 monitor intercepts PSCI, GIC, or the ACPM mailbox.
 
-## 11. DRAM reservations (from `s5e9945-rmem.dtsi` + the e1s board DTS)
+## 12. DRAM reservations (from `s5e9945-rmem.dtsi` + the e1s board DTS)
 
 The static DTS has no `/memory` node; Samsung's bootloader adds it. The
 reserved-memory node uses 2 address cells and 1 size cell, so each `reg` is

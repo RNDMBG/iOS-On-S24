@@ -1,0 +1,680 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index a696d5e..7395c79 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+ 
+ bsd/dev/monotonic.c optional monotonic
++bsd/dev/e1s_camera.c		standard
+ bsd/dev/e1s_input.c		standard
+ bsd/dev/e1s_touch.c		standard
+ bsd/dev/e1s_ufs.c		standard
+diff --git a/bsd/dev/e1s_camera.c b/bsd/dev/e1s_camera.c
+new file mode 100644
+index 0000000..2c92b4d
+--- /dev/null
++++ b/bsd/dev/e1s_camera.c
+@@ -0,0 +1,642 @@
++/*
++ * e1s cameras: the four SM-S921B sensors and the S5E9945 CSIS front end.
++ *
++ * This is a presence probe, not a capture driver.  The camera rails are
++ * PMIC/ACPM-controlled, the sensor MCLKs are CMU outputs, and the CSIS/ISP
++ * path needs SMMU and DMA programming; this kernel does not control any of
++ * those yet.  What it can do safely is:
++ *
++ *   - report how S-Boot left the reset, MCLK and I2C pads;
++ *   - bit-bang the sensor I2C bus and read the chip ID, if the rails and
++ *     MCLK happen to be on;
++ *   - optionally read the CSIS version registers.
++ *
++ * Nothing runs unless e1scam is given:
++ *
++ *   e1scam=1             pads and sensor ID probe
++ *   e1scam=2             ... and the CSIS version summary
++ *   e1scam_reset=1       pulse the sensor reset before the ID read
++ *   e1scam_bus=NAME      only gn3, 3lu, 3k1 or imx564 (default: all)
++ *
++ * The camera power domain is not enabled here.  Reading CSIS registers with
++ * e1scam=2 is opt-in because a register access to a gated block can hang the
++ * phone's interconnect; the default (e1scam unset) never touches it.
++ *
++ * Wiring from arch/arm64/boot/dts/samsung/e1s/camera/ in the Samsung tree:
++ *
++ *   sensor  I2C    addr  reset   MCLK (gpg1)  CSIS  PHY
++ *   GN3     hsi2c33 0x10 gpc0-0  ch2 pin2     1     C-PHY
++ *   3LU     hsi2c43 0x10 gpp4-0  ch0 pin0     0     C-PHY
++ *   3K1     hsi2c26 0x2d gpc4-1  ch3 pin3     2     D-PHY
++ *   IMX564  hsi2c37 0x10 gpc0-1  ch1 pin1     3     C-PHY
++ *
++ * The reset and MCLK pads are reported but not driven unless e1scam_reset=1.
++ * MCLK is never started: that needs the camera CMU, which is not ported.
++ */
++#if defined(ARM64_BOARD_CONFIG_E1S)
++
++#include <kern/clock.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++/* ---------------------------------------------------------------- pinctrl */
++
++enum {
++	E1S_GPIO_PERIC0,
++	E1S_GPIO_PERIC1,
++	E1S_GPIO_PERIC2,
++	E1S_GPIO_CMGP,
++	E1S_GPIO_COUNT
++};
++
++static const uint32_t e1s_gpio_pa[E1S_GPIO_COUNT] = {
++	0x10830000UL,                   /* PERIC0 */
++	0x11030000UL,                   /* PERIC1 */
++	0x11830000UL,                   /* PERIC2 */
++	0x14030000UL,                   /* CMGP */
++};
++
++static vm_offset_t e1s_gpio[E1S_GPIO_COUNT];
++
++struct e1s_pin_bank {
++	uint32_t ctrl;
++	uint32_t offset;
++	const char *name;
++};
++
++static const struct e1s_pin_bank e1s_gpp4 = { E1S_GPIO_PERIC0, 0x000, "gpp4" };
++static const struct e1s_pin_bank e1s_gpc0 = { E1S_GPIO_PERIC0, 0x020, "gpc0" };
++static const struct e1s_pin_bank e1s_gpg1 = { E1S_GPIO_PERIC0, 0x080, "gpg1" };
++static const struct e1s_pin_bank e1s_gpc2 = { E1S_GPIO_PERIC1, 0x020, "gpc2" };
++static const struct e1s_pin_bank e1s_gpc4 = { E1S_GPIO_PERIC1, 0x040, "gpc4" };
++static const struct e1s_pin_bank e1s_gpc9 = { E1S_GPIO_PERIC2, 0x1e0, "gpc9" };
++static const struct e1s_pin_bank e1s_gpm2 = { E1S_GPIO_CMGP, 0x040, "gpm2" };
++static const struct e1s_pin_bank e1s_gpm8 = { E1S_GPIO_CMGP, 0x100, "gpm8" };
++
++/* Samsung pinctrl: CON field 0 = input, 1 = output; PUD 0 = none. */
++#define E1S_PIN_INPUT   0U
++#define E1S_PIN_OUTPUT  1U
++#define E1S_PUD_NONE    0U
++
++static vm_offset_t
++bank_reg(const struct e1s_pin_bank *bank, uint32_t offset, unsigned pin)
++{
++	return e1s_gpio[bank->ctrl] + bank->offset + offset +
++	    (pin >= 8 ? 4 : 0);
++}
++
++static uint32_t
++pin_shift(unsigned pin)
++{
++	return (pin & 7U) * 4U;
++}
++
++static uint32_t
++pin_read_con(const struct e1s_pin_bank *bank, unsigned pin)
++{
++	return *(volatile uint32_t *)bank_reg(bank, 0x00, pin);
++}
++
++static uint32_t
++pin_read_pud(const struct e1s_pin_bank *bank, unsigned pin)
++{
++	return *(volatile uint32_t *)bank_reg(bank, 0x08, pin);
++}
++
++static uint32_t
++pin_read_dat(const struct e1s_pin_bank *bank, unsigned pin)
++{
++	return (*(volatile uint32_t *)bank_reg(bank, 0x04, pin) >> (pin & 7U)) & 1U;
++}
++
++static void
++pin_write_con(const struct e1s_pin_bank *bank, unsigned pin, uint32_t value)
++{
++	*(volatile uint32_t *)bank_reg(bank, 0x00, pin) = value;
++}
++
++static void
++pin_write_pud(const struct e1s_pin_bank *bank, unsigned pin, uint32_t value)
++{
++	*(volatile uint32_t *)bank_reg(bank, 0x08, pin) = value;
++}
++
++static void
++pin_write_dat(const struct e1s_pin_bank *bank, unsigned pin, bool high)
++{
++	volatile uint32_t *dat = (volatile uint32_t *)bank_reg(bank, 0x04, pin);
++	uint32_t value = *dat;
++
++	if (high) {
++		value |= 1U << (pin & 7U);
++	} else {
++		value &= ~(1U << (pin & 7U));
++	}
++	*dat = value;
++}
++
++static void
++pin_function(const struct e1s_pin_bank *bank, unsigned pin, uint32_t function)
++{
++	uint32_t shift = pin_shift(pin);
++	uint32_t value = pin_read_con(bank, pin);
++
++	value = (value & ~(0xFU << shift)) | ((function & 0xFU) << shift);
++	pin_write_con(bank, pin, value);
++}
++
++static void
++pin_pull(const struct e1s_pin_bank *bank, unsigned pin, uint32_t pull)
++{
++	uint32_t shift = pin_shift(pin);
++	uint32_t value = pin_read_pud(bank, pin);
++
++	value = (value & ~(0xFU << shift)) | ((pull & 0xFU) << shift);
++	pin_write_pud(bank, pin, value);
++}
++
++static void
++pin_input(const struct e1s_pin_bank *bank, unsigned pin)
++{
++	pin_function(bank, pin, E1S_PIN_INPUT);
++}
++
++static void
++pin_output(const struct e1s_pin_bank *bank, unsigned pin, bool high)
++{
++	pin_write_dat(bank, pin, high);
++	pin_function(bank, pin, E1S_PIN_OUTPUT);
++}
++
++struct e1s_pin_state {
++	vm_offset_t con, pud, dat;
++	uint32_t con_value, pud_value, dat_value;
++};
++
++static void
++pin_save(const struct e1s_pin_bank *bank, unsigned pin, struct e1s_pin_state *state)
++{
++	state->con = bank_reg(bank, 0x00, pin);
++	state->pud = bank_reg(bank, 0x08, pin);
++	state->dat = bank_reg(bank, 0x04, pin);
++	state->con_value = *(volatile uint32_t *)state->con;
++	state->pud_value = *(volatile uint32_t *)state->pud;
++	state->dat_value = *(volatile uint32_t *)state->dat;
++}
++
++static void
++pin_restore(const struct e1s_pin_state *state)
++{
++	/* CON last: until it is restored the pin must not drive the bus. */
++	*(volatile uint32_t *)state->dat = state->dat_value;
++	*(volatile uint32_t *)state->pud = state->pud_value;
++	*(volatile uint32_t *)state->con = state->con_value;
++}
++
++/* --------------------------------------------------------------- sensors */
++
++struct e1s_camera_sensor {
++	const char *name;
++	const char *part;
++	uint32_t id;
++	uint32_t i2c_bus;
++	uint8_t address;
++	const struct e1s_pin_bank *sda;
++	unsigned sda_pin;
++	const struct e1s_pin_bank *scl;
++	unsigned scl_pin;
++	const struct e1s_pin_bank *reset;
++	unsigned reset_pin;
++	const struct e1s_pin_bank *mclk;
++	unsigned mclk_pin;
++	uint32_t mclk_ch;
++	uint32_t csis_ch;
++	uint16_t id_reg;
++	uint16_t rev_reg;
++	uint16_t rev_mask;
++	const char *position;
++};
++
++static const struct e1s_camera_sensor e1s_sensors[] = {
++	{
++		.name = "gn3", .part = "S5KGN3", .id = 0,
++		.i2c_bus = 33, .address = 0x10,
++		.sda = &e1s_gpc9, .sda_pin = 0,
++		.scl = &e1s_gpc9, .scl_pin = 1,
++		.reset = &e1s_gpc0, .reset_pin = 0,
++		.mclk = &e1s_gpg1, .mclk_pin = 2, .mclk_ch = 2,
++		.csis_ch = 1,
++		.id_reg = 0x0000, .rev_reg = 0x0002, .rev_mask = 0xc000,
++		.position = "rear wide",
++	},
++	{
++		.name = "3lu", .part = "S5K3LU", .id = 1,
++		.i2c_bus = 43, .address = 0x10,
++		.sda = &e1s_gpm8, .sda_pin = 0,
++		.scl = &e1s_gpm8, .scl_pin = 1,
++		.reset = &e1s_gpp4, .reset_pin = 0,
++		.mclk = &e1s_gpg1, .mclk_pin = 0, .mclk_ch = 0,
++		.csis_ch = 0,
++		.id_reg = 0x0000, .rev_reg = 0x0002, .rev_mask = 0xa101,
++		.position = "front",
++	},
++	{
++		.name = "3k1", .part = "S5K3K1", .id = 2,
++		.i2c_bus = 26, .address = 0x2d,
++		.sda = &e1s_gpc2, .sda_pin = 0,
++		.scl = &e1s_gpc2, .scl_pin = 1,
++		.reset = &e1s_gpc4, .reset_pin = 1,
++		.mclk = &e1s_gpg1, .mclk_pin = 3, .mclk_ch = 3,
++		.csis_ch = 2,
++		.id_reg = 0x0000, .rev_reg = 0x0002, .rev_mask = 0xa000,
++		.position = "rear tele 3x",
++	},
++	{
++		.name = "imx564", .part = "IMX564", .id = 4,
++		.i2c_bus = 37, .address = 0x10,
++		.sda = &e1s_gpm2, .sda_pin = 0,
++		.scl = &e1s_gpm2, .scl_pin = 1,
++		.reset = &e1s_gpc0, .reset_pin = 1,
++		.mclk = &e1s_gpg1, .mclk_pin = 1, .mclk_ch = 1,
++		.csis_ch = 3,
++		.id_reg = 0x36f2, .rev_reg = 0x36f2, .rev_mask = 0xffff,
++		.position = "rear ultra-wide",
++	},
++};
++
++/* ------------------------------------------------------------------- I2C */
++
++struct e1s_i2c {
++	const struct e1s_pin_bank *sda_bank;
++	unsigned sda_pin;
++	const struct e1s_pin_bank *scl_bank;
++	unsigned scl_pin;
++	struct e1s_pin_state sda_state;
++	struct e1s_pin_state scl_state;
++};
++
++static void
++i2c_delay(void)
++{
++	delay(5);                       /* 100 kHz */
++}
++
++static void
++i2c_sda_low(struct e1s_i2c *bus)
++{
++	pin_output(bus->sda_bank, bus->sda_pin, false);
++}
++
++static void
++i2c_sda_release(struct e1s_i2c *bus)
++{
++	pin_input(bus->sda_bank, bus->sda_pin);
++}
++
++static void
++i2c_scl_low(struct e1s_i2c *bus)
++{
++	pin_output(bus->scl_bank, bus->scl_pin, false);
++}
++
++static void
++i2c_scl_release(struct e1s_i2c *bus)
++{
++	pin_input(bus->scl_bank, bus->scl_pin);
++}
++
++static bool
++i2c_sda_read(struct e1s_i2c *bus)
++{
++	return pin_read_dat(bus->sda_bank, bus->sda_pin) != 0;
++}
++
++static void
++i2c_start(struct e1s_i2c *bus)
++{
++	i2c_sda_release(bus);
++	i2c_scl_release(bus);
++	i2c_delay();
++	i2c_sda_low(bus);
++	i2c_delay();
++	i2c_scl_low(bus);
++	i2c_delay();
++}
++
++static void
++i2c_stop(struct e1s_i2c *bus)
++{
++	i2c_scl_low(bus);
++	i2c_sda_low(bus);
++	i2c_delay();
++	i2c_scl_release(bus);
++	i2c_delay();
++	i2c_sda_release(bus);
++	i2c_delay();
++}
++
++static bool
++i2c_write_bit(struct e1s_i2c *bus, bool bit)
++{
++	if (bit) {
++		i2c_sda_release(bus);
++	} else {
++		i2c_sda_low(bus);
++	}
++	i2c_delay();
++	i2c_scl_release(bus);
++	i2c_delay();
++	i2c_scl_low(bus);
++	i2c_delay();
++	return bit;
++}
++
++static bool
++i2c_read_bit(struct e1s_i2c *bus)
++{
++	bool bit;
++
++	i2c_sda_release(bus);
++	i2c_delay();
++	i2c_scl_release(bus);
++	i2c_delay();
++	bit = i2c_sda_read(bus);
++	i2c_scl_low(bus);
++	i2c_delay();
++	return bit;
++}
++
++static bool
++i2c_write_byte(struct e1s_i2c *bus, uint8_t value)
++{
++	for (int bit = 7; bit >= 0; bit--) {
++		i2c_write_bit(bus, (value >> bit) & 1U);
++	}
++	/* The ninth clock is the slave's ACK: SDA low. */
++	return !i2c_read_bit(bus);
++}
++
++static uint8_t
++i2c_read_byte(struct e1s_i2c *bus, bool ack)
++{
++	uint8_t value = 0;
++
++	for (int bit = 0; bit < 8; bit++) {
++		value = (uint8_t)((value << 1) | (i2c_read_bit(bus) ? 1U : 0U));
++	}
++	if (ack) {
++		i2c_sda_low(bus);
++	} else {
++		i2c_sda_release(bus);
++	}
++	i2c_delay();
++	i2c_scl_release(bus);
++	i2c_delay();
++	i2c_scl_low(bus);
++	i2c_delay();
++	i2c_sda_release(bus);
++	return value;
++}
++
++static void
++i2c_begin(struct e1s_i2c *bus)
++{
++	pin_save(bus->sda_bank, bus->sda_pin, &bus->sda_state);
++	pin_save(bus->scl_bank, bus->scl_pin, &bus->scl_state);
++	pin_pull(bus->sda_bank, bus->sda_pin, E1S_PUD_NONE);
++	pin_pull(bus->scl_bank, bus->scl_pin, E1S_PUD_NONE);
++	pin_input(bus->sda_bank, bus->sda_pin);
++	pin_input(bus->scl_bank, bus->scl_pin);
++	i2c_delay();
++
++	/*
++	 * If a sensor was interrupted mid-byte it can hold SDA low.  Clock it
++	 * free before the first start condition.
++	 */
++	for (int i = 0; i < 9 && !i2c_sda_read(bus); i++) {
++		i2c_scl_release(bus);
++		i2c_delay();
++		i2c_scl_low(bus);
++		i2c_delay();
++	}
++	i2c_stop(bus);
++}
++
++static void
++i2c_end(struct e1s_i2c *bus)
++{
++	pin_restore(&bus->sda_state);
++	pin_restore(&bus->scl_state);
++}
++
++/*
++ * Read a 16-bit register.  The sensor buses are wired with SDA/SCL in the
++ * order the board DTS lists them, but the pin order is one of the things this
++ * probe exists to check, so the caller can try the other order too.
++ */
++static int
++i2c_read_register(const struct e1s_camera_sensor *sensor, bool swap,
++    uint16_t reg, uint16_t *value)
++{
++	struct e1s_i2c bus;
++	uint8_t address = (uint8_t)(sensor->address << 1);
++	uint8_t high, low;
++
++	bus.sda_bank = swap ? sensor->scl : sensor->sda;
++	bus.sda_pin = swap ? sensor->scl_pin : sensor->sda_pin;
++	bus.scl_bank = swap ? sensor->sda : sensor->scl;
++	bus.scl_pin = swap ? sensor->sda_pin : sensor->scl_pin;
++
++	i2c_begin(&bus);
++	i2c_start(&bus);
++	if (!i2c_write_byte(&bus, address) ||
++	    !i2c_write_byte(&bus, (uint8_t)(reg >> 8)) ||
++	    !i2c_write_byte(&bus, (uint8_t)reg)) {
++		goto no_ack;
++	}
++	i2c_start(&bus);
++	if (!i2c_write_byte(&bus, (uint8_t)(address | 1U))) {
++		goto no_ack;
++	}
++	high = i2c_read_byte(&bus, true);
++	low = i2c_read_byte(&bus, false);
++	i2c_stop(&bus);
++	i2c_end(&bus);
++	*value = (uint16_t)((high << 8) | low);
++	return 0;
++
++no_ack:
++	i2c_stop(&bus);
++	i2c_end(&bus);
++	return -1;
++}
++
++/* ------------------------------------------------------------- presence */
++
++static bool
++e1s_camera_map(void)
++{
++	if (e1s_gpio[0] != 0) {
++		return true;
++	}
++	for (uint32_t i = 0; i < E1S_GPIO_COUNT; i++) {
++		e1s_gpio[i] = ml_io_map(e1s_gpio_pa[i], 0x1000);
++		if (e1s_gpio[i] == 0) {
++			printf("e1s-cam: cannot map GPIO controller %u at %08x\n",
++			    i, e1s_gpio_pa[i]);
++			return false;
++		}
++	}
++	return true;
++}
++
++static void
++e1s_camera_pads(const struct e1s_camera_sensor *sensor)
++{
++	printf("e1s-cam: %s pads i2c %s-%u/%s-%u con %08x/%08x dat %08x "
++	    "reset %s-%u con %08x dat %u mclk %s-%u con %08x\n",
++	    sensor->name,
++	    sensor->sda->name, sensor->sda_pin,
++	    sensor->scl->name, sensor->scl_pin,
++	    pin_read_con(sensor->sda, sensor->sda_pin),
++	    pin_read_con(sensor->scl, sensor->scl_pin),
++	    *(volatile uint32_t *)bank_reg(sensor->sda, 0x04, sensor->sda_pin),
++	    sensor->reset->name, sensor->reset_pin,
++	    pin_read_con(sensor->reset, sensor->reset_pin),
++	    pin_read_dat(sensor->reset, sensor->reset_pin),
++	    sensor->mclk->name, sensor->mclk_pin,
++	    pin_read_con(sensor->mclk, sensor->mclk_pin));
++}
++
++static void
++e1s_camera_reset_begin(const struct e1s_camera_sensor *sensor,
++    struct e1s_pin_state *state)
++{
++	pin_save(sensor->reset, sensor->reset_pin, state);
++	pin_pull(sensor->reset, sensor->reset_pin, E1S_PUD_NONE);
++	pin_output(sensor->reset, sensor->reset_pin, false);
++	delay(1000);
++	pin_output(sensor->reset, sensor->reset_pin, true);
++	delay(5000);
++}
++
++static void
++e1s_camera_id(const struct e1s_camera_sensor *sensor, bool do_reset)
++{
++	struct e1s_pin_state reset_state;
++	uint16_t id = 0, rev = 0;
++	bool reset_saved = false;
++
++	if (do_reset) {
++		e1s_camera_reset_begin(sensor, &reset_state);
++		reset_saved = true;
++	}
++
++	for (int swap = 0; swap < 2; swap++) {
++		if (i2c_read_register(sensor, swap != 0, sensor->id_reg, &id) != 0) {
++			continue;
++		}
++		if (sensor->rev_reg != sensor->id_reg &&
++		    i2c_read_register(sensor, swap != 0, sensor->rev_reg, &rev) != 0) {
++			printf("e1s-cam: %s id[0x%04x]=0x%04x, revision read failed\n",
++			    sensor->name, sensor->id_reg, id);
++		} else if (sensor->rev_reg == sensor->id_reg) {
++			printf("e1s-cam: %s id[0x%04x]=0x%04x%s\n",
++			    sensor->name, sensor->id_reg, id,
++			    id == 0x564c ? " (IMX564)" : "");
++		} else {
++			printf("e1s-cam: %s id[0x%04x]=0x%04x rev[0x%04x]=0x%04x "
++			    "(rev mask 0x%04x -> 0x%04x) on %s pins\n",
++			    sensor->name, sensor->id_reg, id,
++			    sensor->rev_reg, rev, sensor->rev_mask,
++			    rev & sensor->rev_mask,
++			    swap ? "swapped" : "normal");
++		}
++		goto out;
++	}
++	printf("e1s-cam: %s no ACK at 0x%02x (normal and swapped pins)\n",
++	    sensor->name, sensor->address);
++
++out:
++	if (reset_saved) {
++		pin_restore(&reset_state);
++	}
++}
++
++/* ---------------------------------------------------------------- CSIS */
++
++static const uint32_t e1s_csis_pa[4] = {
++	0x1a030000UL,                   /* CSIS0: front, 3LU */
++	0x1a040000UL,                   /* CSIS1: wide, GN3 */
++	0x1a050000UL,                   /* CSIS2: tele, 3K1 */
++	0x1a060000UL,                   /* CSIS3: ultra-wide, IMX564 */
++};
++
++static void
++e1s_camera_csis(void)
++{
++	for (uint32_t i = 0; i < 4; i++) {
++		vm_offset_t base = ml_io_map(e1s_csis_pa[i], 0x1000);
++		uint32_t version;
++
++		if (base == 0) {
++			printf("e1s-cam: cannot map CSIS%u at %08x\n", i,
++			    e1s_csis_pa[i]);
++			continue;
++		}
++		version = *(volatile uint32_t *)base;
++		printf("e1s-cam: csis%u @%08x version %08x (%u.%u.%u)\n",
++		    i, e1s_csis_pa[i], version,
++		    (version >> 24) & 0xffU, (version >> 16) & 0xffU,
++		    (version >> 8) & 0xffU);
++	}
++}
++
++/* ---------------------------------------------------------------- entry */
++
++void
++e1s_camera_probe(void)
++{
++	char only[24] = "all";
++	uint32_t level = 0, reset = 0;
++
++	if (!PE_parse_boot_argn("e1scam", &level, sizeof(level)) || level == 0) {
++		return;
++	}
++	PE_parse_boot_argn("e1scam_reset", &reset, sizeof(reset));
++	PE_parse_boot_argn("e1scam_bus", only, sizeof(only));
++
++	if (!e1s_camera_map()) {
++		return;
++	}
++	printf("e1s-cam: probe level %u; camera rails and MCLKs are not "
++	    "controlled by this kernel\n", level);
++
++	for (uint32_t i = 0; i < sizeof(e1s_sensors) / sizeof(e1s_sensors[0]);
++	    i++) {
++		const struct e1s_camera_sensor *sensor = &e1s_sensors[i];
++
++		if (strcmp(only, "all") != 0 && strcmp(only, sensor->name) != 0) {
++			continue;
++		}
++		printf("e1s-cam: %s %s %s, hsi2c%u@0x%02x, reset %s-%u, "
++		    "mclk%u %s-%u, csis%u\n",
++		    sensor->name, sensor->part, sensor->position,
++		    sensor->i2c_bus, sensor->address,
++		    sensor->reset->name, sensor->reset_pin,
++		    sensor->mclk_ch, sensor->mclk->name, sensor->mclk_pin,
++		    sensor->csis_ch);
++		e1s_camera_pads(sensor);
++		e1s_camera_id(sensor, reset != 0);
++	}
++
++	if (level >= 2) {
++		printf("e1s-cam: reading CSIS registers (camera power domain)\n");
++		e1s_camera_csis();
++	}
++}
++
++#endif /* ARM64_BOARD_CONFIG_E1S */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index ac999f8..d26f4e9 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -97,6 +97,7 @@
+ 
+ #if defined(E1S)
+ extern void e1s_ufs_probe(void);
++extern void e1s_camera_probe(void);
+ #endif
+ 
+ #include <security/audit/audit.h>
+@@ -990,6 +991,7 @@ bsd_init(void)
+ 		redwood_input_init();           /* /dev/redwood-touch */
+ #if defined(E1S)
+ 		e1s_ufs_probe();                /* read-only UFS register summary */
++		e1s_camera_probe();             /* opt-in camera presence probe */
+ #endif
+ 		redwood_audio_init();           /* /dev/redwood-audio */
+ 		redwood_virtio_blk_init();      /* /dev/rvblk0, a disk image of the host (QEMU) */
