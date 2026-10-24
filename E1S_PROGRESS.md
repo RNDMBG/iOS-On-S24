@@ -404,3 +404,28 @@ whether it really passes the framebuffer this way, whether the touch rails are
 on, whether the STM pads are ordered as assumed, and whether the kernel reaches
 the framebuffer console. No device image was flashed or booted; no screen photo
 and no `0x91200000` log exist.
+
+## 2026-10-24 - pre-flash verification
+
+The BOOT image is now checked before it can be flashed:
+
+- `tools/e1s/verify_boot.py` parses the Samsung boot v4 header (magic,
+  `kernel_size`, `os_version` at +16, `header_size` at +20, version at +40),
+  the `SEANDROIDENFORCE` footer, the arm64 Image header, the appended
+  `SWEETXNU` payload, every segment and the ADT bounds. It can also compare
+  the Odin tar byte for byte.
+- Current image: 16,334,864 bytes, payload at `0x19000`, 10 segments,
+  fallback RAM `0xA0000000+0x20000000`, ADT 16,644 bytes,
+  `debug=0x14e cpus=1 keepsyms=1 -v`.
+- `tools/e1s/read_log.py` now recognizes both `E1SXNU01` (the XNU loader) and
+  `E1SPRB1` (the old hardware probe).
+- `docs/flashing.md` describes the XNU handoff test: BOOT-only Odin AP flash,
+  a stock-BOOT dump that must be exactly 67,108,864 bytes and hash-matched,
+  the loader's expected screen output, and the restore path.
+
+CI run 5 (`40131171994`) passed: all four host checks and the full
+`xnu/apply-e1s.sh` base + patch application on Ubuntu.
+
+The image has **not** been flashed. The next step needs the phone: back up
+BOOT, verify its hash, flash only BOOT, photograph the loader/XNU screen, and
+read `0x91200000` if TWRP's `/dev/mem` allows it.
