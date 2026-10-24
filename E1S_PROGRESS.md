@@ -429,3 +429,28 @@ CI run 5 (`40131171994`) passed: all four host checks and the full
 The image has **not** been flashed. The next step needs the phone: back up
 BOOT, verify its hash, flash only BOOT, photograph the loader/XNU screen, and
 read `0x91200000` if TWRP's `/dev/mem` allows it.
+
+## 2026-10-25 - main branch and status checklist
+
+`experimental/xnu-e1s` was fast-forwarded into `main` (commits `955b779`,
+`6537f35`). The README checklist now separates what exists from what has been
+tested on hardware:
+
+- checked: HackiOS 16.5 base, `E1S` machine configuration, EL2/EL1 loader,
+  DTB framebuffer/RAM-window selection, ADT/payload generation, volume-up and
+  STM touch drivers, and the pre-flash verifier;
+- unchecked: the first BOOT flash, an XNU boot, native UFS 4.0/MCQ root,
+  DECON/DSIM, hardware-verified touch/keys, SMP, and iOS userland.
+
+The `xnu-e1s` workflow now also runs on `main`; it applies the pinned base and
+the e1s patch series and runs the host checks, but still does not build the
+kernel. No device image was flashed and no new device observation exists.
+
+## 2026-10-25 - native e1s UFS work starts
+
+The next patch targets the native UFS 4.0 host at `0x17100000` and the MCQ
+registers at `0x17100400`. The HackiOS `redwood_ufs.c`/`redwood_ufshc.c`
+pair is not reusable as-is: it depends on a loader mailbox and on UEFI's
+transfer list staying in the controller, which the e1s loader does not
+provide. The e1s driver is being written as a standalone read-only block
+device with host-side tests before any device test.

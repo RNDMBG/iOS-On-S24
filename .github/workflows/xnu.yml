@@ -3,7 +3,7 @@ name: xnu-e1s
 on:
   workflow_dispatch:
   push:
-    branches: [experimental/xnu-e1s]
+    branches: [main, experimental/xnu-e1s]
     paths:
       - "xnu/hackios/**"
       - "xnu/patches-e1s/**"

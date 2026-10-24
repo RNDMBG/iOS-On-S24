@@ -28,14 +28,17 @@ the HackiOS base; the kernel builds, but no image has been booted on the phone.
 | Storage | UFS |
 | iOS target | 16.5 (HackiOS `xnu-8796.121.2`) |
 | Userland target | iPhone X, iOS 16.5 |
-| Current stage | XNU builds; hardware probe; no boot |
+| Current stage | XNU builds; loader/ADT/payload written; no device test |
 
 Some of this is very different from the older Exynos phones I looked at. The
 S24 has 10 CPU cores, GICv3, a 25.6 MHz timer, a 1080x2340 panel, an STM SPI
 touch controller, and UFS. I'm not reusing addresses or drivers from older
 ports unless the probe confirms them on this phone.
 
-## What's done
+## Status checklist
+
+Checked means the item exists in the repository and passes its host checks.
+"Untested" means exactly that: nothing here has been run on the phone yet.
 
 - [x] Confirmed the target is SM-S921B / `e1s` / Exynos 2400.
 - [x] Pulled the GIC, timer, UFS, display, touch, PMIC, and key details out of
@@ -46,40 +49,41 @@ ports unless the probe confirms them on this phone.
       writes a log to RAM.
 - [x] Wrote a boot image packer, an image padding tool, and a log reader.
 - [x] Built the probe with Zig 0.16.0 and checked the output by hand.
-- [x] Added a QEMU `virt` smoke test for the payload.
-- [x] Added a UFS READ(10) path to the QEMU probe and checked the first block
-      against a known signature.
+- [x] Added a QEMU `virt` smoke test for the payload and its UFS READ(10) path.
 - [x] Checked that the installed TWRP matches the official `e1s` build.
 - [x] Recorded the firmware, CSC, bootloader revision, and root status.
 - [x] Made a 64 MiB stock BOOT backup and a BOOT-only restore tar.
-
-## What isn't done
-
-- [ ] Flashing the probe and getting the first real device log.
-- [ ] An XNU loader or boot trampoline for `e1s` that has been tested on the
-      phone. An experimental one now exists on `experimental/xnu-e1s`.
-- [ ] An XNU image that has been booted on this phone. The kernel now builds
-      from the HackiOS iOS 16.5 base with an `E1S` machine configuration; the
-      loader, ADT, and payload paths are untested.
-- [ ] A UFS driver. This is the part I expect to take the longest.
+- [x] Switched the kernel base to HackiOS `xnu-8796.121.2` (iOS 16.5).
+- [x] Added the `E1S` machine configuration and linked
+      `mach.development.e1s`.
+- [x] Wrote the EL2/EL1 loader, framebuffer discovery, DTB RAM-window
+      selection, ADT patch, and `SWEETXNU` payload handoff (untested).
+- [x] Wrote the e1s volume-up driver and the STM SPI9 touch driver (untested).
+- [x] Generated an iOS 16.5 D22AP ADT with NVRAM, `/options`, `/pram`, and the
+      iPhone X `/product` tree.
+- [x] Added `tools/e1s/verify_boot.py` and host tests for the ADT, FDT parser,
+      keys, and touch protocol.
+- [ ] First BOOT-only flash and a real screen photo plus `0x91200000` log.
+- [ ] An XNU kernel that has been booted on this phone.
+- [ ] A native UFS 4.0/MCQ root device. The Qualcomm loader-shared driver
+      cannot be reused.
 - [ ] A DECON/DSIM display driver. The first display target is the framebuffer
       S-Boot already set up.
-- [ ] An STM SPI touch driver that has been tested. The e1s driver is written
-      (bit-banged SPI9 plus the STM event protocol) but has never talked to a
-      powered controller.
-- [ ] RTC, power key, battery, and USB.
-- [ ] Interrupts, MMU, caches, and SMP inside XNU.
+- [ ] Touch, RTC, power key, battery, and USB verified on hardware.
+- [ ] SMP inside XNU (the first test boots with `cpus=1`).
 - [ ] `launchd`, SpringBoard, or any other part of iOS.
 - [ ] GPU acceleration. The first UI target is CPU-rendered, and it will be slow.
 
 A probe that reaches `PROBE DONE` only proves that S-Boot accepted the image,
 the payload ran, the framebuffer was usable, and the GIC/UFS ID registers could
-be read. It does not mean iOS boots.
+be read. It does not mean iOS boots. The current milestone is the loader/XNU
+handoff: loader text, the chosen framebuffer and RAM window, then an early XNU
+console that stops at the missing root device.
 
-## Experimental XNU branch
+## XNU stack
 
-`main` is the probe-only branch. Branch `experimental/xnu-e1s` now builds the
-real HackiOS base instead of the old SWEET series:
+The XNU work that started on `experimental/xnu-e1s` is merged into `main` and
+builds the real HackiOS base instead of the old SWEET series:
 
 - `xnu/hackios/`: pinned copy of HackiOS's XNU changes at
   `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c` (APSL 2.0). `apply-base.sh`
@@ -113,8 +117,9 @@ real HackiOS base instead of the old SWEET series:
   update its arm64 header so S-Boot loads both.
 - `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
   iOS 16.5 IPSW and extract its `/product` tree.
-- `.github/workflows/xnu.yml`: the old macOS CI build for the SWEET machine
-  config (not the current base yet).
+- `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
+  series on Ubuntu, then runs the host ADT/FDT/touch/keys checks. It does not
+  build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,
