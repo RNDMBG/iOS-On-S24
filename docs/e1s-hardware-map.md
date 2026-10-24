@@ -168,6 +168,38 @@ and a large vendor protocol. It is not a generic SPI HID device. A minimal XNU
 bring-up should first read the chip ID over SPI and verify the IRQ/CS wiring
 before attempting the full touch stack.
 
+### Pinctrl registers (verified in `pinctrl-exynos-arm64.c`)
+
+`gpp9` is bank 7 of PERIC1 (`0x11030000 + 0xe0`); `gpa1` is bank 1 of ALIVE
+(`0x12850000 + 0x20`).  Both use `exynos850_bank_type_off`/`_alive`:
+
+| Register | Offset | Meaning |
+| --- | --- | --- |
+| CON | `+0x00` (`+0x04` for pins 8-15) | 4 bits per pin; 0 input, 1 output, 2+ alternate |
+| DAT | `+0x04` | 1 bit per pin |
+| PUD | `+0x08` | 4 bits per pin; 0 none, 1 down, 2 up |
+| DRV | `+0x0c` | 4 bits per pin |
+
+SPI9 bus pins in the DTS are `gpp9-2`, `gpp9-1`, `gpp9-0`; CS is `gpp9-3`.
+The USI09 pad order is assumed to be `gpp9-2 = CLK`, `gpp9-1 = MOSI`,
+`gpp9-0 = MISO`.  Verify with a device-ID read before trusting events.
+
+Samsung's STM SPI framing (`drivers/input/sec_input/stm_spi/stm_spi.c`):
+
+- Register write: `0xC0`, address, data.  Opcodes such as `0xA0`, `0xA2`,
+  `0xA4`, `0xFA`, `0xFB`, `0xD0` go out without the `0xC0` prefix.
+- Register read: write the address, then send `0xD1 0x00 0x00`; the payload
+  starts at reply byte 4.
+- Event read: send `0x87`; the 16-byte event starts at reply byte 2.
+- Device ID `0x22` returns two characters and a 3-byte ID; panel info `0x23`
+  returns TX/RX channel counts at bytes 8/9.
+
+Touch is powered by PMIC LDO18 (I/O) and LDO9 (AVDD).  The rails are normally
+enabled by Samsung's Android PMIC driver, not by S-Boot; the current XNU port
+cannot reach the AP-side ACPM mailbox, so a device-ID read may return
+`0x00`/`0xff` until that is implemented.  There is no reset GPIO in the board
+node; power cycling is the reset.
+
 ## 6. Display
 
 | Block | Address | Source |
@@ -181,9 +213,13 @@ before attempting the full touch stack.
 | Panel reset | `gpc7-0`, active-low | DTS board file |
 | Panel | `s6e3fae`, 1080x2340, 120/80/60/48/30/24/10 Hz | DTS `display_s6e3fae_e1s.dtsi` |
 
-The first display target remains the S-Boot framebuffer at `0xFA200000`. A real
-XNU display driver needs DECON + DSIM + panel power sequencing. `hsi2c_43` is
-the front-camera EEPROM bus in the e1s board files, not the display bus.
+The first display target remains the S-Boot framebuffer at `0xFA200000`.
+`shim/e1s-xnu/fdt.c` now scans the S-Boot DTB for a display reserved-memory or
+`simple-framebuffer` node, accepts a candidate only if its `reg` is a RAM
+region of at least 4 MiB, and uses its base/size/width/height/stride for
+`boot_args.video`.  `0xFA200000` is only the fallback.  A real XNU display
+driver needs DECON + DSIM + panel power sequencing. `hsi2c_43` is the
+front-camera EEPROM bus in the e1s board files, not the display bus.
 
 ## 7. UFS
 
@@ -246,3 +282,28 @@ switching. USB is not part of the first key/display milestone.
 - Whether UFS is in MCQ mode at handoff and whether the PHY stays initialized.
 - Which DRAM banks are free of firmware carve-outs.
 - Whether an EL2 monitor intercepts PSCI, GIC, or the ACPM mailbox.
+
+## 11. DRAM reservations (from `s5e9945-rmem.dtsi` + the e1s board DTS)
+
+The static DTS has no `/memory` node; Samsung's bootloader adds it. The
+reserved-memory node uses 2 address cells and 1 size cell, so each `reg` is
+12 bytes. Fixed reservations relevant to a kernel window:
+
+| Node | Address | Size | Notes |
+| --- | --- | --- | --- |
+| `cp_rmem` | `0x8_80000000` | `0x0D800000` | modem |
+| `cp_rmem1` | `0x8_90000000` | `0x1DF00000` | modem |
+| `abox_rmem` | `0x8_8D800000` | `0x02800000` | audio |
+| `teegris_rmem` | `0x8_C0000000` | `0x0B800000` | TEE, high bank |
+| `teegris_rmem` | `0x0ED310000` | `0x2000` | TEE, low bank |
+| `s2mpu_table` | `0xC5000000` | `0x02C00000` | S2MPU |
+| `sgpu_rmem` | `0x8FF00000` | `0x000E0000` | GPU |
+| `log_kernel` | `0xFC911000` | `0x00200000` | Samsung log |
+| `log_s2d` | `0xFCB11000` | `0x1E00000` | Samsung log |
+| `log_arrdumprst` | `0xFE911000` | `0x1520000` | Samsung log |
+| `log_bcm` | `0xFBC00000` | `0x00400000` | Samsung log |
+| `sec_debug_next` (board) | `0x91200000` | `0x00200000` | the loader's log space |
+
+The old `0x880000000` XNU window is inside `cp_rmem`; do not use it.
+The loader picks a free gap from the live DTB and falls back to
+`0xA0000000`/512 MiB only when the DTB has no `/memory` node.

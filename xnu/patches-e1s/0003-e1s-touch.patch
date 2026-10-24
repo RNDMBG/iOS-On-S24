@@ -1,0 +1,438 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index f8daa11..c336b4d 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -110,6 +110,7 @@ bsd/dev/unix_startup.c			standard
+ 
+ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/e1s_input.c		standard
++bsd/dev/e1s_touch.c		standard
+ bsd/dev/redwood_input.c		standard
+ bsd/dev/redwood_virtio_input.c	standard
+ bsd/dev/redwood_goodix.c	standard
+diff --git a/bsd/dev/e1s_touch.c b/bsd/dev/e1s_touch.c
+new file mode 100644
+index 0000000..f55acdc
+--- /dev/null
++++ b/bsd/dev/e1s_touch.c
+@@ -0,0 +1,396 @@
++/*
++ * e1s touch: the STM controller on SPI9 (Samsung Galaxy S24, SM-S921B).
++ *
++ * The controller is an STM "STM_TS" part with Samsung firmware; its protocol
++ * is the one in drivers/input/sec_input/stm_spi/ of Samsung's Android kernel.
++ * There is no SPI framework or clock driver in this kernel, so the transfer
++ * is done by hand on the four SPI9 pins and the interrupt line is polled.
++ *
++ * Wiring from the e1s board DTS (docs/e1s-hardware-map.md):
++ *
++ *   SPI9 CLK   gpp9-2   PERIC1 + 0xe0, CON[11:8], DAT bit 2
++ *   SPI9 MOSI  gpp9-1   PERIC1 + 0xe0, CON[7:4],  DAT bit 1
++ *   SPI9 MISO  gpp9-0   PERIC1 + 0xe0, CON[3:0],  DAT bit 0
++ *   SPI9 CS    gpp9-3   PERIC1 + 0xe0, CON[15:12], DAT bit 3
++ *   IRQ        gpa1-2   ALIVE  + 0x20, DAT bit 2, active low
++ *
++ * The pin -> signal assignment follows the USI09 pad order of the SoC
++ * (gpp9-2/1/0 are the spi9_bus pins in the DTS, gpp9-3 is spi9_cs).  It is a
++ * hypothesis until the device ID is read on a phone; if the probe prints
++ * "no response", that is the first thing to check.
++ *
++ * The STM chip is powered by PMIC LDO18 (I/O) and LDO9 (AVDD).  This kernel
++ * cannot reach the PMIC's ACPM mailbox yet, so the driver depends on S-Boot
++ * having left those rails on.  The probe at start-up says whether it did.
++ *
++ * Boot arguments:
++ *   e1stouch=0        do not start the driver
++ *   e1stouch_poll_us  poll interval, default 4000
++ *   e1stouch_delay    bit-bang half-period loop count, default 400
++ *   e1stouch_flip     1 mirror X, 2 mirror Y, 3 both
++ */
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/redwood_input.h>
++#include <sys/systm.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_ALIVE_GPIO          0x12850000UL
++#define E1S_GPA1_CON            (E1S_ALIVE_GPIO + 0x20)
++#define E1S_GPA1_DAT            (E1S_ALIVE_GPIO + 0x24)
++#define E1S_GPA1_PUD            (E1S_ALIVE_GPIO + 0x28)
++
++#define E1S_PERIC1_GPIO         0x11030000UL
++#define E1S_GPP9_CON            (E1S_PERIC1_GPIO + 0xe0)
++#define E1S_GPP9_DAT            (E1S_PERIC1_GPIO + 0xe4)
++#define E1S_GPP9_PUD            (E1S_PERIC1_GPIO + 0xe8)
++#define E1S_GPP9_DRV            (E1S_PERIC1_GPIO + 0xec)
++
++#define E1S_SPI_CLK_PIN         2
++#define E1S_SPI_MOSI_PIN        1
++#define E1S_SPI_MISO_PIN        0
++#define E1S_SPI_CS_PIN          3
++#define E1S_TOUCH_IRQ_PIN       2
++
++/* Samsung pinctrl: CON field 0 = input, 1 = output; PUD 0 none, 2 pull-up */
++#define E1S_GPIO_INPUT          0U
++#define E1S_GPIO_OUTPUT         1U
++#define E1S_PUD_NONE            0U
++#define E1S_PUD_UP              2U
++
++/* STM commands (stm_reg.h, CONFIG_TOUCHSCREEN_STM_SPI path) */
++#define STM_READ_ONE_EVENT      0x87
++#define STM_READ_DEVICE_ID      0x22
++#define STM_READ_PANEL_INFO     0x23
++#define STM_REG_R               0xFB
++#define STM_CUSTOM_W            0xC0
++#define STM_CUSTOM_R            0xD1
++
++#define STM_EVENT_SIZE          16
++#define STM_MAX_EVENTS          31
++#define STM_MAX_FINGERS         10
++
++#define STM_EVENT_COORD         0
++#define STM_COORD_PRESS         1
++#define STM_COORD_MOVE          2
++#define STM_COORD_RELEASE       3
++
++#define STM_TOUCHTYPE_NORMAL    0
++#define STM_TOUCHTYPE_GLOVE     3
++#define STM_TOUCHTYPE_PALM      5
++#define STM_TOUCHTYPE_WET       6
++
++static vm_offset_t gpp9;
++static vm_offset_t gpa1;
++static uint32_t e1s_poll_us = 4000;
++static uint32_t e1s_halfbit = 400;
++static uint32_t e1s_flip;
++static uint32_t last_x[STM_MAX_FINGERS], last_y[STM_MAX_FINGERS];
++static uint32_t down[STM_MAX_FINGERS];
++
++static inline uint32_t
++gpio_rd(vm_offset_t reg)
++{
++	return *(volatile uint32_t *)reg;
++}
++
++static inline void
++gpio_wr(vm_offset_t reg, uint32_t value)
++{
++	*(volatile uint32_t *)reg = value;
++}
++
++static void
++pin_function(vm_offset_t con, unsigned pin, unsigned function)
++{
++	uint32_t shift = (pin & 7U) * 4U;
++	uint32_t value = gpio_rd(con + (pin >= 8 ? 4 : 0));
++
++	value &= ~(0xFU << shift);
++	value |= (function & 0xFU) << shift;
++	gpio_wr(con + (pin >= 8 ? 4 : 0), value);
++}
++
++static void
++pin_pull(vm_offset_t pud, unsigned pin, unsigned pull)
++{
++	uint32_t shift = (pin & 7U) * 4U;
++	uint32_t value = gpio_rd(pud + (pin >= 8 ? 4 : 0));
++
++	value &= ~(0xFU << shift);
++	value |= (pull & 0xFU) << shift;
++	gpio_wr(pud + (pin >= 8 ? 4 : 0), value);
++}
++
++static inline void
++pin_set(vm_offset_t dat, unsigned pin, bool high)
++{
++	uint32_t value = gpio_rd(dat);
++
++	if (high) {
++		value |= 1U << pin;
++	} else {
++		value &= ~(1U << pin);
++	}
++	gpio_wr(dat, value);
++}
++
++static inline bool
++pin_get(vm_offset_t dat, unsigned pin)
++{
++	return (gpio_rd(dat) >> pin) & 1U;
++}
++
++static inline void
++spi_delay(void)
++{
++	for (volatile uint32_t i = 0; i < e1s_halfbit; i++) {
++	}
++}
++
++static void
++e1s_spi_transfer(const uint8_t *tx, uint8_t *rx, uint32_t length)
++{
++	pin_set(E1S_GPP9_DAT, E1S_SPI_CS_PIN, false);
++	for (uint32_t i = 0; i < length; i++) {
++		uint8_t out = tx != NULL ? tx[i] : 0;
++		uint8_t in = 0;
++
++		for (int bit = 7; bit >= 0; bit--) {
++			pin_set(E1S_GPP9_DAT, E1S_SPI_MOSI_PIN, (out >> bit) & 1U);
++			spi_delay();
++			pin_set(E1S_GPP9_DAT, E1S_SPI_CLK_PIN, true);
++			spi_delay();
++			in = (uint8_t)((in << 1) | (pin_get(E1S_GPP9_DAT, E1S_SPI_MISO_PIN) ? 1U : 0U));
++			pin_set(E1S_GPP9_DAT, E1S_SPI_CLK_PIN, false);
++			spi_delay();
++		}
++		if (rx != NULL) {
++			rx[i] = in;
++		}
++	}
++	pin_set(E1S_GPP9_DAT, E1S_SPI_CS_PIN, true);
++}
++
++/*
++ * The write framing of stm_ts_no_lock_spi_write(): the commands the chip
++ * treats as opcodes go out as they are, everything else is prefixed 0xC0.
++ */
++static void
++stm_write(const uint8_t *reg, uint32_t tlen, const uint8_t *data, uint32_t len)
++{
++	uint8_t tx[8];
++	uint32_t n = 0;
++	bool opcode = reg[0] == 0xA0 || reg[0] == 0xA2 || reg[0] == 0xA4 ||
++	    reg[0] == 0xA6 || reg[0] == 0xA7 || reg[0] == 0xFA ||
++	    reg[0] == STM_REG_R || reg[0] == 0xD0;
++
++	if (!opcode) {
++		tx[n++] = STM_CUSTOM_W;
++	}
++	for (uint32_t i = 0; i < tlen && n < sizeof(tx); i++) {
++		tx[n++] = reg[i];
++	}
++	for (uint32_t i = 0; i < len && n < sizeof(tx); i++) {
++		tx[n++] = data[i];
++	}
++	e1s_spi_transfer(tx, NULL, n);
++}
++
++static int
++stm_read_command(uint8_t command, uint8_t *buf, uint32_t len)
++{
++	uint8_t tx[2 + 32] = { 0 };
++	uint8_t rx[2 + 32] = { 0 };
++
++	if (len > 32) {
++		return -1;
++	}
++	tx[0] = command;
++	e1s_spi_transfer(tx, rx, len + 2);
++	memcpy(buf, rx + 2, len);
++	return 0;
++}
++
++/*
++ * Read an address through the STM "custom read" frame: write the address
++ * (0xC0 prefixed), then send 0xD1 0x00 0x00 and take the payload four bytes
++ * into the reply, exactly as stm_ts_spi_read() does for tlen <= 3.
++ */
++static int
++stm_read_address(uint8_t address, uint8_t *buf, uint32_t len)
++{
++	uint8_t reg = address;
++	uint8_t tx[4 + 32] = { STM_CUSTOM_R, 0, 0, 0 };
++	uint8_t rx[4 + 32] = { 0 };
++
++	if (len > 32) {
++		return -1;
++	}
++	stm_write(&reg, 1, NULL, 0);
++	e1s_spi_transfer(tx, rx, len + 4);
++	memcpy(buf, rx + 4, len);
++	return 0;
++}
++
++static const char *
++stm_chip_id(uint8_t id[5])
++{
++	if (stm_read_address(STM_READ_DEVICE_ID, id, 5) != 0) {
++		return "read failed";
++	}
++	if ((id[0] == 0 && id[1] == 0 && id[2] == 0 && id[3] == 0 && id[4] == 0) ||
++	    (id[0] == 0xff && id[1] == 0xff && id[2] == 0xff && id[3] == 0xff && id[4] == 0xff)) {
++		return "no response (rails off, pins wrong, or chip held in reset)";
++	}
++	return "ok";
++}
++
++static void
++post_event(const uint8_t *event)
++{
++	uint32_t eid = event[0] & 0x3;
++	uint32_t finger = (event[0] >> 2) & 0xf;
++	uint32_t action = event[0] >> 6;
++	uint32_t type;
++	uint32_t x, y;
++
++	if (eid != STM_EVENT_COORD || finger >= STM_MAX_FINGERS) {
++		return;
++	}
++	type = ((event[6] >> 6) & 0x3) << 2;
++	type |= (event[7] >> 6) & 0x3;
++	if (type != STM_TOUCHTYPE_NORMAL && type != STM_TOUCHTYPE_GLOVE &&
++	    type != STM_TOUCHTYPE_PALM && type != STM_TOUCHTYPE_WET) {
++		return;
++	}
++
++	x = ((uint32_t)event[1] << 4) | (event[3] & 0x0f);
++	y = ((uint32_t)event[2] << 4) | (event[3] >> 4);
++	if (x > 4095) {
++		x = 4095;
++	}
++	if (y > 4095) {
++		y = 4095;
++	}
++	x = x * 65535U / 4095U;
++	y = y * 65535U / 4095U;
++	if (e1s_flip & 1) {
++		x = 65535U - x;
++	}
++	if (e1s_flip & 2) {
++		y = 65535U - y;
++	}
++
++	if (action == STM_COORD_PRESS || (action == STM_COORD_MOVE && !down[finger])) {
++		redwood_touch_post(REDWOOD_TOUCH_DOWN, finger, x, y);
++		down[finger] = 1;
++	} else if (action == STM_COORD_MOVE) {
++		redwood_touch_post(REDWOOD_TOUCH_MOVE, finger, x, y);
++	} else if (action == STM_COORD_RELEASE && down[finger]) {
++		redwood_touch_post(REDWOOD_TOUCH_UP, finger, x, y);
++		down[finger] = 0;
++	}
++	last_x[finger] = x;
++	last_y[finger] = y;
++}
++
++static void
++e1s_touch_thread(void *arg __unused, wait_result_t result __unused)
++{
++	uint32_t empty = 0;
++
++	printf("e1s-touch: polling gpa1-2 every %u us\n", e1s_poll_us);
++	for (;;) {
++		if (!pin_get(E1S_GPA1_DAT, E1S_TOUCH_IRQ_PIN)) {
++			uint32_t events = 0;
++
++			for (uint32_t i = 0; i < STM_MAX_EVENTS; i++) {
++				uint8_t event[STM_EVENT_SIZE] = { 0 };
++
++				if (stm_read_command(STM_READ_ONE_EVENT, event, sizeof(event)) != 0) {
++					break;
++				}
++				if (event[0] == 0) {
++					break;
++				}
++				post_event(event);
++				events++;
++			}
++			if (events == 0 && empty++ < 4) {
++				printf("e1s-touch: interrupt with an empty event buffer\n");
++			} else if (events != 0) {
++				empty = 0;
++			}
++		}
++		delay_for_interval(e1s_poll_us, NSEC_PER_USEC);
++	}
++}
++
++void
++e1s_touch_init(void)
++{
++	uint32_t enabled = 1;
++	uint8_t id[5] = { 0 };
++	uint8_t info[11] = { 0 };
++	thread_t thread;
++
++	if (PE_parse_boot_argn("e1stouch", &enabled, sizeof(enabled)) && enabled == 0) {
++		printf("e1s-touch: disabled (e1stouch=0)\n");
++		return;
++	}
++	PE_parse_boot_argn("e1stouch_poll_us", &e1s_poll_us, sizeof(e1s_poll_us));
++	PE_parse_boot_argn("e1stouch_delay", &e1s_halfbit, sizeof(e1s_halfbit));
++	PE_parse_boot_argn("e1stouch_flip", &e1s_flip, sizeof(e1s_flip));
++	if (e1s_poll_us < 500) {
++		e1s_poll_us = 500;
++	}
++	if (e1s_halfbit == 0) {
++		e1s_halfbit = 1;
++	}
++
++	gpp9 = ml_io_map(E1S_PERIC1_GPIO, 0x1000);
++	gpa1 = ml_io_map(E1S_ALIVE_GPIO, 0x1000);
++	if (gpp9 == 0 || gpa1 == 0) {
++		printf("e1s-touch: cannot map the PERIC1/ALIVE GPIO blocks\n");
++		return;
++	}
++
++	/* CS high before it becomes an output, so the chip is not selected. */
++	pin_set(E1S_GPP9_DAT, E1S_SPI_CS_PIN, true);
++	pin_function(E1S_GPP9_CON, E1S_SPI_CS_PIN, E1S_GPIO_OUTPUT);
++	pin_pull(E1S_GPP9_PUD, E1S_SPI_CS_PIN, E1S_PUD_NONE);
++
++	pin_function(E1S_GPP9_CON, E1S_SPI_CLK_PIN, E1S_GPIO_OUTPUT);
++	pin_function(E1S_GPP9_CON, E1S_SPI_MOSI_PIN, E1S_GPIO_OUTPUT);
++	pin_function(E1S_GPP9_CON, E1S_SPI_MISO_PIN, E1S_GPIO_INPUT);
++	pin_pull(E1S_GPP9_PUD, E1S_SPI_CLK_PIN, E1S_PUD_NONE);
++	pin_pull(E1S_GPP9_PUD, E1S_SPI_MOSI_PIN, E1S_PUD_NONE);
++	pin_pull(E1S_GPP9_PUD, E1S_SPI_MISO_PIN, E1S_PUD_NONE);
++	pin_set(E1S_GPP9_DAT, E1S_SPI_CLK_PIN, false);
++	pin_set(E1S_GPP9_DAT, E1S_SPI_MOSI_PIN, false);
++
++	pin_function(E1S_GPA1_CON, E1S_TOUCH_IRQ_PIN, E1S_GPIO_INPUT);
++	pin_pull(E1S_GPA1_PUD, E1S_TOUCH_IRQ_PIN, E1S_PUD_UP);
++
++	printf("e1s-touch: gpp9 con=%#x dat=%#x; gpa1 con=%#x dat=%#x irq=%d\n",
++	    gpio_rd(E1S_GPP9_CON), gpio_rd(E1S_GPP9_DAT),
++	    gpio_rd(E1S_GPA1_CON), gpio_rd(E1S_GPA1_DAT),
++	    pin_get(E1S_GPA1_DAT, E1S_TOUCH_IRQ_PIN));
++
++	printf("e1s-touch: device id: %s (%02x %02x %02x %02x %02x)\n",
++	    stm_chip_id(id), id[0], id[1], id[2], id[3], id[4]);
++	if (stm_read_address(STM_READ_PANEL_INFO, info, sizeof(info)) == 0 &&
++	    info[8] != 0 && info[9] != 0) {
++		printf("e1s-touch: panel %u x %u channels\n", info[8], info[9]);
++	}
++
++	if (kernel_thread_start(e1s_touch_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("e1s-touch: no thread for the touch controller\n");
++	}
++}
+diff --git a/bsd/dev/redwood_input.c b/bsd/dev/redwood_input.c
+index 23c587d..96838a6 100755
+--- a/bsd/dev/redwood_input.c
++++ b/bsd/dev/redwood_input.c
+@@ -222,6 +222,7 @@ redwood_input_init(void)
+ 	 */
+ 	printf("redwood-touch: e1s platform; redwood hardware drivers are disabled\n");
+ 	e1s_input_init();
++	e1s_touch_init();
+ #else
+ 	redwood_cpufreq_init();
+ 	redwood_virtio_input_init();
+diff --git a/bsd/sys/redwood_input.h b/bsd/sys/redwood_input.h
+index 1a2f7a3..320d1a8 100755
+--- a/bsd/sys/redwood_input.h
++++ b/bsd/sys/redwood_input.h
+@@ -43,6 +43,7 @@ void redwood_virtio_input_init(void);   /* boot-arg virtio_input=1: QEMU's virti
+ void redwood_goodix_init(void);         /* boot-arg touchscreen=1: the phone's Goodix or FocalTech touch screen */
+ void redwood_buttons_init(void);        /* boot-arg buttons=1: the phone's power and volume keys */
+ void e1s_input_init(void);             /* e1s: the volume-up key on the ALIVE GPIO block */
++void e1s_touch_init(void);            /* e1s: the STM controller on SPI9 */
+ void redwood_ufs_init(void);           /* ufs=2 to xnuloader: the phone's storage, read only, through the loader (ufs_shared_pa=) */
+ void redwood_ufs_report(const char *when); /* where reading the storage has spent its time so far */
+ bool redwood_ufs_dev(dev_t dev);           /* one of the storage's devices */

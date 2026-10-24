@@ -33,6 +33,11 @@ import adt  # noqa: E402
 
 LC_SEGMENT_64, LC_UNIXTHREAD, LC_DYLD_CHAINED_FIXUPS = 0x19, 0x5, 0x80000034
 PAGE = 0x4000
+# HackiOS's loader links the kernel at this virtual base.  The kernel's
+# __TEXT starts KERNEL_LINK_OFFSET above it; start.s expects these exact
+# values in boot_args.virtBase.
+KERNEL_VIRT_BASE = 0xFFFFFFF004000000
+KERNEL_LINK_OFFSET = 0x03000000
 BOOT_LINE_LENGTH = 608
 CMDLINE = 0x48
 SEG_TABLE = CMDLINE + BOOT_LINE_LENGTH	# 0x2a8
@@ -147,9 +152,10 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     segs = [s for s in m['segs'] if s['vmsize']]
     text = m['segs'][0]
     assert text['name'] == '__TEXT' and text['fileoff'] == 0
-    # virt_base: 32MB (16K-granule L2 block) below the mach header, so start.s's
-    # block mapping that starts at the header's block begins exactly at phys_base.
-    virt_base = text['vmaddr'] & ~(0x2000000 - 1)
+    # The HackiOS kernel is linked against KERNEL_VIRT_BASE; do not derive
+    # it from __TEXT (that produced a base 32 MiB too high for this kernel).
+    virt_base = KERNEL_VIRT_BASE
+    assert text['vmaddr'] >= virt_base + KERNEL_LINK_OFFSET, (hex(text['vmaddr']), hex(virt_base))
     kernel_end = max(s['vmaddr'] + s['vmsize'] for s in segs)
     kernel_end = (kernel_end + PAGE - 1) & ~(PAGE - 1)
 

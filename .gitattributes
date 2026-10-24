@@ -1,0 +1,22 @@
+# This repository is built by Linux/WSL tools; keep the working tree LF even
+# when it is checked out on Windows.
+* text=auto eol=lf
+
+# Build inputs are consumed by Linux/WSL tools; keep them LF.
+*.sh text eol=lf
+*.py text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.S text eol=lf
+*.s text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+
+# The pinned HackiOS base and the patch series must be byte-identical to what
+# git apply sees; no checkout conversion at all.
+xnu/hackios/files/** -text
+xnu/hackios/redwood.patch -text
+xnu/hackios/LICENSE -text
+xnu/patches-e1s/*.patch -text

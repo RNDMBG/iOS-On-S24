@@ -305,3 +305,102 @@ passed; the patch applied cleanly to a temporary post-0072/post-0084 tree with
 the expected `sweet_ufs.c` and `conf/files` insertions. It has not been built
 by the strict XNU workflow or tested on the phone. No device image was produced,
 flashed, or booted.
+
+## 2026-10-24 - switch to the HackiOS iOS 16.5 base; first E1S kernel build
+
+The target is now the same kernel HackiOS uses, not the old SWEET series:
+
+- Apple tag `xnu-8796.121.2` (`c54f35ca767986246321eb901baf8f5ff7923f6a`),
+  the iOS 16.5 / Darwin 22.5.0 kernel.
+- HackiOS changes at `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c`, pinned in
+  `xnu/hackios/` (`redwood.patch` + `files/`, APSL 2.0).
+- The old `xnu/patches/0001-0085` series is retained for history but is no
+  longer used by `xnu/apply-e1s.sh`.
+
+`xnu/hackios/apply-base.sh` fetches the tag, verifies the base commit, applies
+`redwood.patch`, copies `files/`, and normalizes line endings. A clean tree
+then builds the HackiOS base as `MACHINE=BCM2837` on WSL (clang 21, Theos
+cctools, iPhoneOS16.5 SDK). The build links
+`BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837` (16 MB) and
+stops only in the final `check_all_exports` symbol-set pass, the same known
+failure as the HackiOS reference.
+
+The E1S machine configuration (`0001`) adds:
+
+- `config/MASTER.arm64.e1s` and `pexpert/pexpert/arm64/E1S.h`.
+- `MAX_CPUS 10`, `MAX_CPU_CLUSTERS 4`, `MAX_CPU_CLUSTER_PHY_ID 9`, ARMv9
+  feature flags, 64-byte cache lines, and the generic ARMv8.2-compatible build
+  flags XNU 8796 can compile for this core.
+- `MACHINE_FLAGS_ARM64_E1S`, the board-header install rule, and the
+  `BCM2837`-owned generic paths (trust cache, IOKit service wait, video console,
+  SCTLR check) extended to `E1S`.
+
+With `MACHINE=E1S`, a clean tree links
+`BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s` (16 MB). This is a
+build result, not a boot.
+
+`0002` gates the redwood-only input/UFS/GPU/Wi-Fi drivers in
+`redwood_input_init()` and adds `bsd/dev/e1s_input.c` (volume-up on `gpa3-0`,
+`0x12850064` bit 0, polled every 20 ms, `e1skeys=0` disables it).
+
+`0003` adds `bsd/dev/e1s_touch.c`:
+
+- S5E9945 pinctrl layout verified from `pinctrl-exynos-arm64.c`:
+  `gpp9` at PERIC1 `0x110300E0`, CON `+0x00`, DAT `+0x04`, PUD `+0x08`;
+  `gpa1` at ALIVE `0x12850020`.
+- SPI9 pads `gpp9-2/1/0` (CLK/MOSI/MISO, the USI09 pad order) are bit-banged,
+  `gpp9-3` is CS, and `gpa1-2` is the active-low interrupt, polled every 4 ms.
+- The STM protocol follows Samsung's `stm_spi.c`: `0xC0`-prefixed register
+  writes, `0xD1 00 00` reads with the payload at reply offset 4, direct `0x87`
+  event reads with the payload at offset 2, device ID `0x22`, panel info `0x23`.
+- Events are decoded from the 16-byte coordinate record (tid, press/move/
+  release, 12-bit x/y) and scaled to 0..65535 for `/dev/redwood-touch`.
+
+The ADT generator now matches what HackiOS's kernel expects from iBoot:
+
+- A valid 8 KiB CHRP NVRAM image (`nvram-proxy-data`), `/options`, `/pram`,
+  `/defaults/kern.vm_compressor = 2`, serial/model/regulatory strings, and the
+  iPhone X root identity (`target-type D22`, `platform-name t8015`).
+- `/chosen` MAC addresses, security-status properties, boot manifest hash, and
+  the D22AP `/product` tree, refetched from the iOS 16.5 (20F66) iPhone X IPSW
+  so it matches the 16.5 userland.
+- `tools/e1s/test_e1s_adt.py` checks all of this on the host.
+
+The loader now scans the S-Boot DTB for the display reserved-memory /
+simple-framebuffer node, accepts it only when it is a RAM region of at least
+4 MiB, and otherwise falls back to `0xFA200000`. The chosen base, size, width,
+height, and stride go into `boot_args.video`. This replaces the old hard-coded
+framebuffer assumption.
+
+The RAM window is no longer hardcoded either. Reading Samsung's
+`s5e9945-rmem.dtsi` showed that the old `0x880000000` assumption sits inside
+`cp_rmem` (`0x8_80000000`, size `0xD800000`), the modem's memory. The loader
+now:
+
+- parses `/memory` and `/reserved-memory` with the node's real
+  `#address-cells`/`#size-cells` (Samsung uses 2/1, so a reg is 12 bytes, not
+  the 16-byte shape the first parser assumed);
+- subtracts the reserved regions, the framebuffer, the loader+payload image,
+  the `0x91200000` log reservation and the DTB itself;
+- takes a 256-512 MiB aligned window from the largest remaining gap, and
+  falls back to `0xA0000000` when the DTB has no `/memory` node;
+- writes the chosen base/size into `boot_args`, `/chosen/dram-base`,
+  `/chosen/dram-size` and `/pram`.
+
+Generated (not flashed):
+
+| File | Size |
+| --- | ---: |
+| `mach.development.e1s` | 16 MB |
+| `out/e1s-boot-touch.img` | 16,334,864 bytes |
+| `out/e1s-boot-touch.img.tar` | 16,343,040 bytes |
+
+Boot image SHA-256:
+`798af03c7a8b954d79adc473fb80b669f9c7f81ffae0e64556a0e838b6c80c7c`
+(the hash changes with every rebuild).
+
+Still unverified: whether S-Boot passes a DTB with `/memory` nodes at all,
+whether it really passes the framebuffer this way, whether the touch rails are
+on, whether the STM pads are ordered as assumed, and whether the kernel reaches
+the framebuffer console. No device image was flashed or booted; no screen photo
+and no `0x91200000` log exist.

@@ -11,7 +11,10 @@
 #include "fdt.h"
 #include "gic.h"
 
+/* What Samsung's bootloader normally leaves behind; the S-Boot device tree can
+ * name a different base and the loader prefers that. */
 #define FB_BASE		0xFA200000UL
+#define FB_SIZE		0x009a4000UL
 #define FB_W		1080U
 #define FB_H		2340U
 #define FB_STRIDE	(FB_W * 4U)
@@ -59,6 +62,7 @@ _Static_assert(__builtin_offsetof(struct boot_args, CommandLine) == 108, "boot_a
 _Static_assert(sizeof(struct boot_args) == 736, "boot_args layout");
 
 uint64_t boot_args_pa;
+extern char _head[];
 extern uintptr_t payload_addr(void);
 void halt(void) __attribute__((noreturn));
 
@@ -88,24 +92,28 @@ static void log_char(char c)
 	wr32(LOG_BASE + 8, log_pos);
 }
 
+static uint64_t fb_base = FB_BASE;
+static uint64_t fb_size = FB_SIZE;
+static uint32_t fb_w = FB_W, fb_h = FB_H, fb_stride = FB_STRIDE;
+
 static void fill(int x0, int y0, int w, int h, uint32_t c)
 {
-	volatile uint32_t *fb = (volatile uint32_t *)FB_BASE;
+	volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)fb_base;
 	if (x0 < 0) { w += x0; x0 = 0; }
 	if (y0 < 0) { h += y0; y0 = 0; }
-	if (x0 + w > (int)FB_W) w = (int)FB_W - x0;
-	if (y0 + h > (int)FB_H) h = (int)FB_H - y0;
+	if (x0 + w > (int)fb_w) w = (int)fb_w - x0;
+	if (y0 + h > (int)fb_h) h = (int)fb_h - y0;
 	for (int y = y0; y < y0 + h; y++)
 		for (int x = x0; x < x0 + w; x++)
-			fb[y * (FB_STRIDE / 4) + x] = c;
+			fb[y * (fb_stride / 4) + x] = c;
 }
 
 static void screen_putc(char c)
 {
-	if (c == '\n' || col >= FB_W / 16U) {
+	if (c == '\n' || col >= fb_w / 16U) {
 		col = 0;
 		row++;
-		if (row >= FB_H / 32U)
+		if (row >= fb_h / 32U)
 			row = 0;
 		if (c == '\n')
 			return;
@@ -211,14 +219,116 @@ static uint64_t fail(const char *why)
 	return 0;
 }
 
+#define MAX_RANGES	96
+#define MIN_WINDOW	(256UL << 20)
+#define MAX_WINDOW	(512UL << 20)
+
+static void
+ranges_sort(struct fdt_range *r, int n)
+{
+	for (int i = 1; i < n; i++) {
+		struct fdt_range v = r[i];
+		int j = i - 1;
+		while (j >= 0 && r[j].base > v.base) {
+			r[j + 1] = r[j];
+			j--;
+		}
+		r[j + 1] = v;
+	}
+}
+
+static void
+consider_gap(uint64_t start, uint64_t end, uint64_t *best_base, uint64_t *best_size)
+{
+	uint64_t base = (start + 0x1fffffUL) & ~0x1fffffUL;
+	uint64_t size;
+
+	if (end <= base)
+		return;
+	size = end - base;
+	if (size > MAX_WINDOW)
+		size = MAX_WINDOW;
+	size &= ~0x1fffffUL;
+	if (size < MIN_WINDOW || size <= *best_size)
+		return;
+	*best_base = end - size;
+	*best_size = size;
+}
+
+/*
+ * Pick XNU's physical window from the memory map S-Boot passes in the DTB,
+ * avoiding reserved-memory nodes, the framebuffer, the log, the boot loader
+ * image and the DTB itself.  Returns 0 when the DTB has no usable /memory
+ * node; the caller then keeps the payload's built-in window.
+ */
+static int
+choose_window(uintptr_t dtb, uintptr_t loader_image, uint64_t loader_size,
+    uint64_t fb_base, uint64_t fb_size, uint64_t *out_base, uint64_t *out_size)
+{
+	struct fdt_range mem[16], occ[MAX_RANGES];
+	int nmem = fdt_memory_ranges(dtb, mem, 16);
+	int nocc;
+	uint64_t best_base = 0, best_size = 0;
+
+	if (nmem <= 0)
+		return 0;
+	nocc = fdt_reserved_ranges(dtb, occ, MAX_RANGES - 4);
+	if (nocc < 0)
+		nocc = 0;
+	occ[nocc].base = fb_base;
+	occ[nocc++].size = fb_size;
+	occ[nocc].base = LOG_BASE;
+	occ[nocc++].size = 0x20000;
+	occ[nocc].base = loader_image;
+	occ[nocc++].size = loader_size;
+	occ[nocc].base = dtb;
+	occ[nocc++].size = 0x200000;
+	ranges_sort(occ, nocc);
+
+	for (int i = 0; i < nmem; i++) {
+		uint64_t cursor = mem[i].base;
+		uint64_t end = mem[i].base + mem[i].size;
+
+		if (end <= cursor)
+			continue;
+		for (int j = 0; j < nocc; j++) {
+			uint64_t rbase = occ[j].base, rsize = occ[j].size;
+			if (rsize == 0 || rbase >= end)
+				continue;
+			if (rbase + rsize <= cursor)
+				continue;
+			if (rbase > cursor) {
+				consider_gap(cursor, rbase, &best_base, &best_size);
+			}
+			if (rbase + rsize > cursor)
+				cursor = rbase + rsize;
+			if (cursor >= end)
+				break;
+		}
+		if (cursor < end) {
+			consider_gap(cursor, end, &best_base, &best_size);
+		}
+	}
+	if (best_size < MIN_WINDOW)
+		return 0;
+	*out_base = best_base;
+	*out_size = best_size;
+	return 1;
+}
+
 uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	log_init();
-	fill(0, 0, FB_W, FB_H, 0xff000000U);
+	int have_fb = fdt_find_framebuffer(dtb, &fb_base, &fb_size, &fb_w, &fb_h, &fb_stride);
+	fill(0, 0, fb_w, fb_h, 0xff000000U);
 	out("S24XNU LOADER (experimental e1s)\n");
 	kv("EL", el);
 	kv("SCTLR", sctlr);
 	kv("DTB", dtb);
+	kv("DTB FB", have_fb ? fb_base : 0);
+	kv("FB", fb_base);
+	kv("FB size", fb_size);
+	kv("FB mode", ((uint64_t)fb_w << 32) | fb_h);
 	out("\n");
 	if (el != 1)
 		return fail("not entered at EL1");
@@ -259,12 +369,43 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	    (p->adt_off & 7) || (p->adt_size & 7) ||
 	    p->entry_va < p->virt_base || p->kernel_end < p->virt_base)
 		return fail("bad payload header");
-	if (p->phys_base < XNU_RAM_BASE || p->phys_base >= XNU_RAM_END ||
-	    !p->mem_size || p->mem_size > XNU_RAM_END - p->phys_base)
-		return fail("payload RAM outside experimental e1s window");
+	if (!p->mem_size || p->mem_size > (4UL << 30))
+		return fail("bad payload RAM size");
 
-	uintptr_t mem_end = p->phys_base + p->mem_size;
-	uintptr_t kernel_end = p->phys_base + (p->kernel_end - p->virt_base);
+	/*
+	 * The payload's phys_base is only the fallback.  Pick the real window
+	 * from S-Boot's /memory and /reserved-memory nodes: the old built-in
+	 * value (0x880000000) is inside the high DRAM bank Samsung reserves for
+	 * the modem in the e1s device tree.
+	 */
+	uint64_t win_base = p->phys_base;
+	uint64_t win_size = p->mem_size;
+	/*
+	 * Keep the loader and the appended payload out of the window: S-Boot
+	 * loads the whole Image (loader + payload) contiguously, and XNU is
+	 * about to zero the window.  _head is the first byte of the Image.
+	 */
+	uintptr_t loader_image = (uintptr_t)_head;
+	uint64_t loader_size = 0x40000 + (32UL << 20);
+	if ((uintptr_t)p > loader_image)
+		loader_size = ((uintptr_t)p - loader_image) + (32UL << 20);
+	if (choose_window(dtb, loader_image, loader_size,
+	    fb_base, fb_size, &win_base, &win_size)) {
+		if (win_size > p->mem_size)
+			win_size = p->mem_size;
+		kv("window from DTB", win_base);
+	} else {
+		kv("window fallback", win_base);
+	}
+	kv("win", win_base);
+	kv("win size", win_size);
+	out("\n");
+	if (win_base < 0x80000000ULL || win_size < MIN_WINDOW ||
+	    win_base + win_size < win_base)
+		return fail("no usable RAM window");
+
+	uintptr_t mem_end = win_base + win_size;
+	uintptr_t kernel_end = win_base + (p->kernel_end - p->virt_base);
 	if (kernel_end >= mem_end)
 		return fail("kernel larger than RAM window");
 
@@ -278,8 +419,8 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		if (s->vmaddr < p->virt_base || s->file_size > s->vmsize ||
-		    s->vmsize > p->mem_size ||
-		    s->vmaddr - p->virt_base > p->mem_size - s->vmsize)
+		    s->vmsize > win_size ||
+		    s->vmaddr - p->virt_base > win_size - s->vmsize)
 			return fail("bad segment");
 		uint64_t file_end = s->file_off + s->file_size;
 		if (file_end < s->file_off || file_end > (256UL << 20))
@@ -289,16 +430,16 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	}
 	uintptr_t payload_start = (uintptr_t)p;
 	uintptr_t payload_end = payload_start + payload_len;
-	if (payload_start < mem_end && payload_end > p->phys_base)
+	if (payload_start < mem_end && payload_end > win_base)
 		return fail("payload overlaps XNU RAM");
 
 	out("zeroing XNU RAM...\n");
-	zero(p->phys_base, p->mem_size);
+	zero(win_base, win_size);
 	out("zeroed\n");
 
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
-		uintptr_t dst = p->phys_base + (s->vmaddr - p->virt_base);
+		uintptr_t dst = win_base + (s->vmaddr - p->virt_base);
 		copy(dst, payload_start + s->file_off, s->file_size);
 		zero(dst + s->file_size, s->vmsize - s->file_size);
 		clean(dst, dst + s->vmsize);
@@ -318,29 +459,36 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	copy(adt_pa, (uintptr_t)p + p->adt_off, p->adt_size);
 	if (adt_set_boot_cpu_mpidr(adt_pa, p->adt_size, (uint32_t)gi.mpidr))
 		return fail("ADT boot CPU MPIDR patch failed");
+	/* The ADT carries the generator's assumed map; replace it with the one
+	 * this phone actually has.  /pram goes near the top of the window. */
+	uint64_t pram_base = (win_base + win_size - 0x100000ULL) & ~(PAGE_16K - 1);
+	uint64_t pram_size = 0x80000;
+	if (adt_set_dram(adt_pa, p->adt_size, win_base, win_size) ||
+	    adt_set_pram(adt_pa, p->adt_size, pram_base, pram_size))
+		return fail("ADT memory patch failed");
 	zero(ba_pa, PAGE_16K);
 
 	volatile struct boot_args *ba = (volatile struct boot_args *)ba_pa;
 	ba->Revision = 2;
 	ba->Version = 2;
 	ba->virtBase = p->virt_base;
-	ba->physBase = p->phys_base;
-	ba->memSize = p->mem_size;
+	ba->physBase = win_base;
+	ba->memSize = win_size;
 	ba->topOfKernelData = ba_pa + PAGE_16K;
-	ba->Video.v_baseAddr = FB_BASE;
+	ba->Video.v_baseAddr = fb_base;
 	ba->Video.v_display = 1;
-	ba->Video.v_rowBytes = FB_STRIDE;
-	ba->Video.v_width = FB_W;
-	ba->Video.v_height = FB_H;
+	ba->Video.v_rowBytes = fb_stride;
+	ba->Video.v_width = fb_w;
+	ba->Video.v_height = fb_h;
 	ba->Video.v_depth = 32;
-	ba->deviceTreeP = p->virt_base + (adt_pa - p->phys_base);
+	ba->deviceTreeP = p->virt_base + (adt_pa - win_base);
 	ba->deviceTreeLength = (uint32_t)p->adt_size;
 	for (int i = 0; i < BOOT_LINE_LENGTH; i++)
 		ba->CommandLine[i] = p->cmdline[i];
-	ba->memSizeActual = p->mem_size;
+	ba->memSizeActual = win_size;
 	clean(adt_pa, ba_pa + PAGE_16K);
 
-	uintptr_t entry_pa = p->phys_base + (p->entry_va - p->virt_base);
+	uintptr_t entry_pa = win_base + (p->entry_va - p->virt_base);
 	if (entry_pa >= kernel_end)
 		return fail("entry outside kernel");
 	boot_args_pa = ba_pa;

@@ -1,16 +1,17 @@
 > [!CAUTION]
 > **WARNING: THIS PROJECT HAS NOT BEEN TESTED YET. TEST AT YOUR OWN RISK.**
 
-# iOS 16.7 on the Galaxy S24 (Exynos)
+# iOS 16.5 on the Galaxy S24 (Exynos)
 
-I'm working on getting XNU and an iPhone X iOS 16.7 userland running on the
+I'm working on getting XNU and an iPhone X iOS 16.5 userland running on the
 Exynos Galaxy S24. The phone is the SM-S921B, codename `e1s`, with the Exynos
 2400 (S5E9945).
 
-This is not an iOS port yet. The only code here is a probe that boots from the
-BOOT partition, draws to the screen, and records the hardware state I need
-before I can start on XNU. I'm publishing it early so other S24 owners can look
-at it and test the probe if they want.
+The kernel work now starts from the same base HackiOS uses: Apple's
+`xnu-8796.121.2` (the iOS 16.5 kernel) plus the pinned HackiOS changes. The
+old 16.7/SWEET patch series is historical and is no longer the build target.
+The E1S machine configuration and the e1s input/touch patches apply on top of
+the HackiOS base; the kernel builds, but no image has been booted on the phone.
 
 ## The phone
 
@@ -25,9 +26,9 @@ at it and test the probe if they want.
 | Display | 1080 x 2340, `s6e3fae` |
 | Touch | STM over SPI9 |
 | Storage | UFS |
-| iOS target | 16.7.x |
-| Userland target | iPhone X, 16.7.16 |
-| Current stage | Hardware probe |
+| iOS target | 16.5 (HackiOS `xnu-8796.121.2`) |
+| Userland target | iPhone X, iOS 16.5 |
+| Current stage | XNU builds; hardware probe; no boot |
 
 Some of this is very different from the older Exynos phones I looked at. The
 S24 has 10 CPU cores, GICv3, a 25.6 MHz timer, a 1080x2340 panel, an STM SPI
@@ -57,13 +58,15 @@ ports unless the probe confirms them on this phone.
 - [ ] Flashing the probe and getting the first real device log.
 - [ ] An XNU loader or boot trampoline for `e1s` that has been tested on the
       phone. An experimental one now exists on `experimental/xnu-e1s`.
-- [ ] XNU patches that have been built or booted on this phone. The
-      experimental branch carries the SWEET 16K/GICv3 base plus e1s timer and
-      boot-MPIDR patches; this is untested.
+- [ ] An XNU image that has been booted on this phone. The kernel now builds
+      from the HackiOS iOS 16.5 base with an `E1S` machine configuration; the
+      loader, ADT, and payload paths are untested.
 - [ ] A UFS driver. This is the part I expect to take the longest.
-- [ ] A DECON/DSIM display driver. The probe only uses the framebuffer S-Boot
-      already set up.
-- [ ] An STM SPI touch driver.
+- [ ] A DECON/DSIM display driver. The first display target is the framebuffer
+      S-Boot already set up.
+- [ ] An STM SPI touch driver that has been tested. The e1s driver is written
+      (bit-banged SPI9 plus the STM event protocol) but has never talked to a
+      powered controller.
 - [ ] RTC, power key, battery, and USB.
 - [ ] Interrupts, MMU, caches, and SMP inside XNU.
 - [ ] `launchd`, SpringBoard, or any other part of iOS.
@@ -75,52 +78,65 @@ be read. It does not mean iOS boots.
 
 ## Experimental XNU branch
 
-`main` is the probe-only branch (QEMU-tested, not yet device-tested). Branch
-`experimental/xnu-e1s` is an untested scaffold for the next step:
+`main` is the probe-only branch. Branch `experimental/xnu-e1s` now builds the
+real HackiOS base instead of the old SWEET series:
 
-- `xnu/patches/0001-0081`: the SWEET 16 KiB-page/GICv3 XNU 8796 base.
-- `xnu/patches/0082-e1s-s24.patch`: e1s comments and virtual-timer INTID 27
-  (the ADT can override it).
-- `xnu/patches/0083-e1s-boot-mpidr.patch`: removes the S8 boot-MPIDR and
-  topology assumptions so a single e1s boot CPU can use its live MPIDR. The
-  loader patches that MPIDR into the ADT before XNU starts.
-- `xnu/patches/0084-e1s-skip-unported-hw.patch`: keeps the S8 keys, touch and
-  USB drivers disabled by default. They still poke S8 MMIO and can fault on
-  e1s; `sweethw=1` opts back in for debugging.
-- These patches do not add working display, touch, UFS, RTC, or UI support.
-- `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to the assumed
-  `0x880000000` RAM window and jumps to XNU. It prepares the GICv3
+- `xnu/hackios/`: pinned copy of HackiOS's XNU changes at
+  `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c` (APSL 2.0). `apply-base.sh`
+  fetches tag `xnu-8796.121.2` and applies `redwood.patch` plus `files/`.
+- `xnu/apply-e1s.sh`: applies the base, then every patch in
+  `xnu/patches-e1s/` in order.
+- `xnu/patches-e1s/0001-e1s-machine-config.patch`: adds the `E1S` machine
+  configuration, the Exynos 2400 board header (10 CPUs, 4 clusters, ARMv9
+  feature set, cache geometry), and the generic-platform guards.
+- `xnu/patches-e1s/0002-e1s-input.patch`: keeps the Qualcomm redwood input /
+  UFS / GPU / Wi-Fi drivers from running on e1s and adds the volume-up key on
+  `gpa3-0` (`0x12850064` bit 0).
+- `xnu/patches-e1s/0003-e1s-touch.patch`: the STM controller on SPI9.
+  `gpp9-2/1/0` are clocked by hand as GPIO (the SoC's USI09 pad assignment),
+  `gpp9-3` is chip select, and `gpa1-2` is polled as the active-low interrupt.
+  The driver speaks Samsung's STM protocol (`0x87` one-event reads, `0x22`
+  device ID, `0x23` panel info) and posts to `/dev/redwood-touch`.
+- `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
+  window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
+  and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
+  `0x880000000` value is inside the modem's `cp_rmem`). It prepares the GICv3
   distributor/redistributor, handles EL2 entry, writes the live boot-CPU
-  MPIDR into the ADT `/cpus/cpu0/reg`, and refuses a payload that overlaps
-  the RAM window before zeroing it.
-- `tools/e1s/xnu/mkadt.py`: experimental ADT with e1s GIC, timer, framebuffer,
-  native 1080x2340 panel, real D22AP `/product`, and a speculative
-  `/sweet-ufs` node at `0x17100000`.
+  MPIDR and the chosen `dram-base`/`dram-size`/`pram` into the ADT, finds the
+  S-Boot framebuffer through the DTB (falling back to `0xFA200000`), and
+  refuses a payload that overlaps the RAM window before zeroing it.
+- `tools/e1s/xnu/mkadt.py`: e1s ADT with the GICv3/timer nodes, the real D22AP
+  `/product` tree, and the pieces HackiOS's kernel needs from iBoot: a valid
+  CHRP NVRAM image, `/options`, `/pram`, `/defaults/kern.vm_compressor`, and
+  the iPhone X identity/serial properties.
 - `tools/e1s/append_payload.py`: append the payload to the loader Image and
   update its arm64 header so S-Boot loads both.
-- `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from the
-  iOS 16.7.16 IPSW and extract its `/product` tree.
-- `tools/e1s/mkiosroot.sh`, `sweet-root-tweaks.py`, `mkinit.py`: topaz-derived
-  tools to build an HFS+ iOS root and apply the bring-up tweaks.
-- `.github/workflows/xnu.yml`: macOS CI build for the SWEET machine config.
+- `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
+  iOS 16.5 IPSW and extract its `/product` tree.
+- `.github/workflows/xnu.yml`: the old macOS CI build for the SWEET machine
+  config (not the current base yet).
 
-The CI workflow has built the XNU kernel successfully. The latest strict run,
-`39943555573`, includes `0083` and `0084`; the first run was `39929644259`.
-No image has been flashed or booted. CI artifacts were uploaded; downloading
-them needs GitHub authentication. The RAM base/size, entry level, GICR extent,
-framebuffer address and UFS behaviour still need measurement on SM-S921B.
-The UFS node is a probe, not a working root: the S24 host may be in UFS 4.0
-MCQ mode instead of the legacy UTRL path this driver uses.
+The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
+16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,
+entry level, framebuffer address, touch power rails, and UFS behaviour still
+need measurement on SM-S921B. The RAM window is now taken from the DTB rather
+than hardcoded: e1s's own `s5e9945-rmem.dtsi` puts the modem at
+`0x8_80000000` (`cp_rmem`) and `0x8_90000000` (`cp_rmem1`), so the old
+`0x880000000` assumption would have zeroed firmware memory. The UFS node is a
+probe, not a working root: the S24 host may be in UFS 4.0 MCQ mode instead of
+the legacy UTRL path the SWEET driver uses. The touch controller's LDO18/LDO9
+rails are normally enabled by Android's PMIC driver; the XNU kernel cannot
+reach the ACPM mailbox yet, so touch depends on S-Boot leaving those rails on.
 
-The patch work I expect to do, in order:
+The work I expect to do, in order:
 
-1. Platform identification and an early console.
-2. GICv3 and the 25.6 MHz arch timer.
-3. MMU, caches, and CPU bring-up.
-4. UFS transport and a block device.
-5. Framebuffer/display and touch.
-6. RTC, buttons, battery, and USB.
-7. iOS userland.
+1. Boot this kernel to the framebuffer console and capture `0x91200000`.
+2. Give the kernel a userland image and a storage path (`RAMDisk` first, then
+   UFS through the loader).
+3. Power the touch rails and test the STM driver on the panel.
+4. RTC, buttons, battery, and USB.
+5. Cameras (the HackiOS camera driver is Qualcomm-specific and cannot be
+   reused; an Exynos CSIS/ISP driver is a separate project).
 
 The iPhone X rootfs, shared cache, and other Apple binaries are not in this
 repo. The root-building scripts expect those files from an IPSW on a Linux

@@ -1,0 +1,152 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 9cd24b4..f8daa11 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+ 
+ bsd/dev/monotonic.c optional monotonic
++bsd/dev/e1s_input.c		standard
+ bsd/dev/redwood_input.c		standard
+ bsd/dev/redwood_virtio_input.c	standard
+ bsd/dev/redwood_goodix.c	standard
+diff --git a/bsd/dev/e1s_input.c b/bsd/dev/e1s_input.c
+new file mode 100644
+index 0000000..2479047
+--- /dev/null
++++ b/bsd/dev/e1s_input.c
+@@ -0,0 +1,96 @@
++/*
++ * e1s hardware input: the volume-up key on the ALIVE GPIO block.
++ *
++ * gpa3-0 is at 0x12850064, bit 0.  S-Boot configures it as an input with a
++ * pull-up, so a pressed key reads as 0.  We only read the DAT register; the
++ * pin's CON/PUD/DRV registers and the PMIC belong to the firmware.
++ *
++ * This file is compiled for every machine config so that the common input
++ * code can call e1s_input_init() unconditionally.  Only an E1S kernel does
++ * anything.
++ */
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <arm/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include <sys/redwood_input.h>
++#include <sys/systm.h>
++
++extern kern_return_t thread_terminate(thread_t thread);
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_ALIVE_GPIO_BASE     0x12850000UL
++#define E1S_GPA3_DAT            0x64U
++#define E1S_VOLUP_BIT           0U
++#define E1S_KEY_POLL_MS         20U
++#define E1S_KEY_DEBOUNCE        2U
++
++#if defined(E1S)
++
++static void
++e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
++{
++	vm_offset_t base;
++	uint32_t stable, last, count = 0;
++	thread_t thread;
++
++	base = ml_io_map(E1S_ALIVE_GPIO_BASE, 0x1000);
++	if (base == 0) {
++		printf("e1s-keys: cannot map the ALIVE GPIO block\n");
++		thread_terminate(current_thread());
++	}
++
++	/*
++	 * Start from "released".  A key that is already held is reported after
++	 * the debounce interval, which is what the old SWEET driver did too.
++	 */
++	stable = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
++	last = 1U;
++
++	for (;;) {
++		uint32_t raw = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
++
++		if (raw == stable) {
++			if (count < E1S_KEY_DEBOUNCE) {
++				count++;
++			}
++		} else {
++			stable = raw;
++			count = 0;
++		}
++		if (count >= E1S_KEY_DEBOUNCE && stable != last) {
++			redwood_touch_post(stable == 0 ? REDWOOD_BUTTON_DOWN : REDWOOD_BUTTON_UP,
++			    REDWOOD_BUTTON_VOLUME_UP, 0, 0);
++			last = stable;
++		}
++		delay_for_interval(E1S_KEY_POLL_MS, NSEC_PER_MSEC);
++	}
++}
++
++void
++e1s_input_init(void)
++{
++	uint32_t enabled = 1;
++	thread_t thread;
++
++	if (PE_parse_boot_argn("e1skeys", &enabled, sizeof(enabled)) && enabled == 0) {
++		printf("e1s-keys: disabled (e1skeys=0)\n");
++		return;
++	}
++
++	if (kernel_thread_start(e1s_keys_thread, NULL, &thread) == KERN_SUCCESS) {
++		printf("e1s-keys: watching volume-up at 0x12850064 bit 0\n");
++		thread_deallocate(thread);
++	} else {
++		printf("e1s-keys: no thread for the volume-up key\n");
++	}
++}
++
++#else /* !E1S */
++
++void
++e1s_input_init(void)
++{
++}
++
++#endif /* E1S */
+diff --git a/bsd/dev/redwood_input.c b/bsd/dev/redwood_input.c
+index 8076cf0..23c587d 100755
+--- a/bsd/dev/redwood_input.c
++++ b/bsd/dev/redwood_input.c
+@@ -214,6 +214,15 @@ redwood_input_init(void)
+ 		printf("redwood-touch: cannot create the device\n");
+ 	}
+ 	exit_call = thread_call_allocate(exit_hold_elapsed, NULL);
++#if defined(E1S)
++	/*
++	 * None of the redwood drivers describe e1s hardware.  Keep them out of
++	 * the way until their e1s replacements exist; the common touch queue is
++	 * still created above.
++	 */
++	printf("redwood-touch: e1s platform; redwood hardware drivers are disabled\n");
++	e1s_input_init();
++#else
+ 	redwood_cpufreq_init();
+ 	redwood_virtio_input_init();
+ 	redwood_goodix_init();
+@@ -224,4 +233,5 @@ redwood_input_init(void)
+ 	redwood_adreno_init();
+ 	redwood_wifi_init();
+ 	redwood_adsp_init();
++#endif
+ }
+diff --git a/bsd/sys/redwood_input.h b/bsd/sys/redwood_input.h
+index bb8ad1b..1a2f7a3 100755
+--- a/bsd/sys/redwood_input.h
++++ b/bsd/sys/redwood_input.h
+@@ -42,6 +42,7 @@ void redwood_input_init(void);
+ void redwood_virtio_input_init(void);   /* boot-arg virtio_input=1: QEMU's virtio pointer and keyboard */
+ void redwood_goodix_init(void);         /* boot-arg touchscreen=1: the phone's Goodix or FocalTech touch screen */
+ void redwood_buttons_init(void);        /* boot-arg buttons=1: the phone's power and volume keys */
++void e1s_input_init(void);             /* e1s: the volume-up key on the ALIVE GPIO block */
+ void redwood_ufs_init(void);           /* ufs=2 to xnuloader: the phone's storage, read only, through the loader (ufs_shared_pa=) */
+ void redwood_ufs_report(const char *when); /* where reading the storage has spent its time so far */
+ bool redwood_ufs_dev(dev_t dev);           /* one of the storage's devices */

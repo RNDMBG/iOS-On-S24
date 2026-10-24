@@ -119,6 +119,75 @@ static int find_child(uintptr_t base, uint64_t size, uint32_t parent,
 	return -1;
 }
 
+static int
+set_u64(uintptr_t adt, uint64_t size, uint32_t node, const char *name, uint64_t value)
+{
+	uint32_t nprops;
+	if (rd32(adt, size, node, &nprops))
+		return -1;
+	uint32_t off = node + 8;
+	for (uint32_t i = 0; i < nprops; i++) {
+		uint32_t len;
+		if (!in_bounds(size, off, 36) ||
+		    rd32(adt, size, off + 32, &len))
+			return -1;
+		if (prop_name_is(adt, off, name)) {
+			if ((len & 0x7fffffffU) != 8 || (len & 0x80000000U))
+				return -1;
+			*(volatile uint64_t *)(adt + off + 36) = value;
+			return 0;
+		}
+		len &= 0x7fffffffU;
+		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
+		if (next > size)
+			return -1;
+		off = (uint32_t)next;
+	}
+	return -1;
+}
+
+int
+adt_set_dram(uintptr_t adt, uint64_t size, uint64_t base, uint64_t mem_size)
+{
+	uint32_t chosen;
+	if (!adt || size < 8 ||
+	    find_child(adt, size, 0, "chosen", &chosen))
+		return -1;
+	if (set_u64(adt, size, chosen, "dram-base", base))
+		return -1;
+	return set_u64(adt, size, chosen, "dram-size", mem_size);
+}
+
+int
+adt_set_pram(uintptr_t adt, uint64_t size, uint64_t base, uint64_t pram_size)
+{
+	uint32_t pram, nprops;
+	if (!adt || size < 8 ||
+	    find_child(adt, size, 0, "pram", &pram) ||
+	    rd32(adt, size, pram, &nprops))
+		return -1;
+	uint32_t off = pram + 8;
+	for (uint32_t i = 0; i < nprops; i++) {
+		uint32_t len;
+		if (!in_bounds(size, off, 36) ||
+		    rd32(adt, size, off + 32, &len))
+			return -1;
+		if (prop_name_is(adt, off, "reg")) {
+			if ((len & 0x7fffffffU) != 16 || (len & 0x80000000U))
+				return -1;
+			*(volatile uint64_t *)(adt + off + 36) = base;
+			*(volatile uint64_t *)(adt + off + 44) = pram_size;
+			return 0;
+		}
+		len &= 0x7fffffffU;
+		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
+		if (next > size)
+			return -1;
+		off = (uint32_t)next;
+	}
+	return -1;
+}
+
 int adt_set_boot_cpu_mpidr(uintptr_t adt, uint64_t size, uint32_t mpidr)
 {
 	uint32_t cpus, cpu, nprops, nchildren;

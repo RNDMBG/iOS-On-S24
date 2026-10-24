@@ -19,13 +19,13 @@ probe baseline.
 | Interrupts | GIC-400 | GICv3, GICD/GICR | reads IDs only; no init |
 | Timer | 26 MHz | 25.6 MHz | prints `CNTFRQ_EL0`; no init |
 | Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB only |
-| Touch | S6SY761 | STM SPI9 | none |
+| Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
 | Storage | older UFS | S5E9945 UFS | reads HCI IDs only |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
-| Buttons | Bixby key | no Bixby; volume-up only | `0085` polling driver, untested |
+| Buttons | Bixby key | no Bixby; volume-up only | `e1s_input.c`, untested |
 | USB | older USB | e1s USB | none |
 | Graphics | software | software only planned | none |
-| XNU | older patched tree | experimental scaffold | `0082`-`0085`; not booted |
+| XNU | older patched tree | HackiOS iOS 16.5 base | `E1S` kernel builds; not booted |
 | iOS userland/UI | older userland | not present | none |
 
 If the probe runs, it proves only that S-Boot accepted the BOOT image, the
@@ -33,6 +33,36 @@ payload executed at the expected exception level, the framebuffer address was
 usable, the GIC/UFS ID registers were readable, and the RAM log could be
 written. It does **not** prove UFS storage, touch, RTC, USB, interrupts, MMU,
 SMP, XNU entry, or any iOS userland.
+
+## 0.1 XNU base: HackiOS iOS 16.5, not the SWEET series
+
+The kernel target changed on 2026-10-24. The old `0001-0085` patches applied
+to a different XNU tree and a Qualcomm platform; they are no longer the build
+path. The current tree is:
+
+- Apple `xnu-8796.121.2`
+  (`c54f35ca767986246321eb901baf8f5ff7923f6a`), iOS 16.5 / Darwin 22.5.0.
+- HackiOS `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c`, pinned in
+  `xnu/hackios/`.
+- e1s patches in `xnu/patches-e1s/`.
+
+`xnu/apply-e1s.sh` builds the tree; `MACHINE=E1S` selects the Exynos 2400
+board configuration. The kernel links; the only build failure left is the
+known `check_all_exports` symbol-set pass, after `mach.development.e1s` has
+been produced.
+
+What is e1s-specific so far:
+
+| Piece | Location | State |
+| --- | --- | --- |
+| Machine config, 10 CPUs, 4 clusters | `0001` | builds |
+| Redwood hardware gating, volume-up | `0002` | builds |
+| STM SPI9 touch | `0003` | builds, untested |
+| Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
+| ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
+
+Not ported: UFS root, PMIC/ACPM (including the touch LDOs), RTC, USB,
+battery, cameras, and any SMP configuration beyond the boot CPU.
 
 ## 1. Source facts
 
@@ -207,9 +237,19 @@ module, or a small physical-memory reader.
 
 The board DTS does not contain a `memory` node; Samsung's bootloader injects
 it. The reserved-memory nodes use high addresses such as `0x8_80000000` and
-`0x8_C0000000`, so at least one DRAM bank is above 32 GiB physical. The probe
-will print the `/memory` nodes from the live DTB. Do **not** hardcode the older
-port's `0x880000000`/512 MiB window for XNU until this is measured.
+`0x8_C0000000`, so at least one DRAM bank is above 32 GiB physical. The
+reserved-memory list also identifies the modem's memory: `cp_rmem` at
+`0x8_80000000` (size `0xD800000`) and `cp_rmem1` at `0x8_90000000` (size
+`0x1DF00000`). The older 16.7 port's `0x880000000`/512 MiB window therefore
+lands inside firmware memory and must not be used.
+
+The loader now reads `/memory` and subtracts `/reserved-memory`, the
+framebuffer, its own image, the log and the DTB, then takes a 256-512 MiB
+aligned window from the largest remaining gap. If the DTB has no `/memory`
+node it falls back to `0xA0000000` (low bank, clear of the fixed reservations
+in `s5e9945-rmem.dtsi`). The chosen base and size are written into
+`boot_args` and the ADT's `/chosen/dram-base`, `/chosen/dram-size` and
+`/pram`.
 
 ### Bootloader entry
 

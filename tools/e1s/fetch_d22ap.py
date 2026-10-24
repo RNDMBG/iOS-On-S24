@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch the iPhone X D22AP /product tree from Apple's iOS 16.7.16 IPSW.
+"""Fetch the iPhone X D22AP /product tree from Apple's iOS 16.5 IPSW.
 
 The ADT builder copies /product from the real device tree. The IPSW is
 multi-GB, so this uses HTTP range requests (tools/remotezip.py) to download
@@ -18,9 +18,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import remotezip  # noqa: E402
 
-URL = ("https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/"
-       "1158E502-D76D-4226-AA06-ED5E30CD1111/"
-       "iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw")
+URL = ("https://updates.cdn-apple.com/2023SpringFCS/fullrestores/032-85130/"
+       "6AB0D10A-8AF9-4F6C-8CF5-A1B315CABE88/"
+       "iPhone10,3,iPhone10,6_16.5_20F66_Restore.ipsw")
 MEMBER = "Firmware/all_flash/DeviceTree.d22ap.im4p"
 DEFAULT_OUT = os.path.join(HERE, "..", "..", "research", "ipsw-x", "d22ap.adt")
 
@@ -33,9 +33,14 @@ def main():
         print(f"{out}: already exists (use --force to replace)")
         return
     try:
-        import lzfse
+        import lzfse  # noqa: F401
+        have_module = True
     except ImportError:
-        sys.exit("lzfse is missing: python -m pip install lzfse")
+        have_module = False
+    if not have_module:
+        import shutil
+        if not shutil.which("lzfse"):
+            sys.exit("lzfse is missing: install the lzfse package or its CLI")
 
     entries = remotezip.central_dir(URL)
     hit = [e for e in entries if e[0] == MEMBER]
@@ -50,7 +55,12 @@ def main():
     off = data.find(b"bvx2")
     if off < 0:
         sys.exit(f"{im4p}: no LZFSE bvx2 block")
-    blob = lzfse.decompress(data[off:])
+    if have_module:
+        blob = lzfse.decompress(data[off:])
+    else:
+        import subprocess
+        blob = subprocess.run(["lzfse", "-decode"], input=data[off:],
+                              capture_output=True, check=True).stdout
     if len(blob) < 32:
         sys.exit(f"{im4p}: short device tree")
 

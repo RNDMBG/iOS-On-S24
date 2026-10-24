@@ -10,10 +10,12 @@ import hashlib, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
-# Experimental: the S24 RAM map has not been measured. This places the kernel
-# in the upper bank, away from S-Boot and the low reserved regions, but the
-# address and size are assumptions until a live FDT/memory dump proves them.
-PHYS_BASE = 0x880000000
+# Experimental: the S24 RAM map is chosen by the loader from the S-Boot DTB.
+# This is the fallback used by the ADT/payload before the loader rewrites it:
+# the low DRAM bank at 0xA0000000, clear of the fixed Samsung reservations in
+# s5e9945-rmem.dtsi (0x8FF00000 sgpu, 0xC5000000 S2MPU, 0xED310000 TEE).
+# The old 0x880000000 value sat inside the modem's cp_rmem.
+PHYS_BASE = 0xA0000000
 MEM_SIZE = 0x20000000
 HIGH_PHYS_BASE = PHYS_BASE
 HIGH_MEM_SIZE = MEM_SIZE
@@ -36,6 +38,51 @@ QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
+NVRAM_BANK_SIZE = 0x2000
+PANIC_LOG_BASE = PHYS_BASE + MEM_SIZE - 0x100000
+PANIC_LOG_SIZE = 0x80000
+
+
+def padded32(text):
+    raw = text.encode()
+    if len(raw) >= 32:
+        raise ValueError(f'{text!r} does not fit in 32 bytes')
+    return raw + b'\0' * (32 - len(raw))
+
+
+def nvram_chrp_header(sig, size, name):
+    """One CHRP partition header, as iokit/Kernel/IONVRAMCHRPHandler.cpp reads it."""
+    h = bytearray(16)
+    h[0] = sig
+    blocks = size // 16
+    h[2] = blocks & 0xff
+    h[3] = (blocks >> 8) & 0xff
+    raw = name.encode()
+    h[4:4 + len(raw)] = raw
+    checksum = h[0]
+    for i in range(2, 16):
+        checksum += h[i]
+    while checksum > 0xff:
+        checksum = (checksum & 0xff) + (checksum >> 8)
+    h[1] = checksum
+    return bytes(h)
+
+
+def build_nvram_image():
+    """An empty but valid CHRP NVRAM bank (IOKit refuses to start without one)."""
+    image = bytearray(NVRAM_BANK_SIZE)
+    image[0:16] = nvram_chrp_header(0x5a, 0x20, 'nvram')
+    image[0x20:0x30] = nvram_chrp_header(0x70, NVRAM_BANK_SIZE - 0x20, 'common')
+    image[20:24] = struct.pack('<I', 1)  # generation
+    lo, hi = 1, 0
+    for value in image[20:]:
+        lo = (lo + value) % 65521
+        hi = (hi + lo) % 65521
+    image[16:20] = struct.pack('<I', (hi << 16) | lo)
+    return bytes(image)
+
+
+NVRAM_IMAGE = build_nvram_image()
 
 # The iOS userland is the iPhone X (iPhone10,3 / D22AP) IPSW. MobileGestalt
 # derives product type, device class, home-button-less UI, artwork etc. from
@@ -84,8 +131,26 @@ def build(seed=None, qemu=False, highmem=False):
         ('dram-size', u64(mem_size)),
         ('random-seed', seed),
         ('debug-enabled', u32(1)),
-        ('firmware-version', cstr('e1s-xnu-shim')),
-        ('system-firmware-version', cstr('e1s-xnu-shim')),
+        ('psci-method', cstr('smc')),
+        ('display-rotation', u32(0)),
+        ('firmware-version', cstr('iBoot-8422.100.650')),
+        ('system-firmware-version', cstr('iBoot-8422.100.650')),
+        # MobileGestalt builds the device identifier (UDID) from the serial
+        # number, the chip ID and the two addresses.  Synthetic values: this
+        # is not a real iPhone, but they must be present or lsd waits forever.
+        ('mac-address-wifi0', bytes([0x02, 0x53, 0x32, 0x34, 0x00, 0x01])),
+        ('mac-address-bluetooth0', bytes([0x02, 0x53, 0x32, 0x34, 0x00, 0x02])),
+        ('software-behavior', b'\0' * 16),
+        ('secure-boot', u32(1)),
+        ('production-cert', u32(1)),
+        ('development-cert', u32(0)),
+        ('embedded-panic-log-size', u32(PANIC_LOG_SIZE)),
+        # iBoot hands the kernel a CHRP-format copy of NVRAM; IOKit asserts
+        # when the node is missing.
+        ('nvram-bank-size', u32(NVRAM_BANK_SIZE)),
+        ('nvram-bank-count', u32(1)),
+        ('nvram-current-bank', u32(0)),
+        ('nvram-proxy-data', NVRAM_IMAGE),
         # iBoot's SHA-384 of the boot manifest; /sbin/mount -P 1 exits unless
         # it exists (bind mounts /private/preboot/<hex>/usr/standalone/firmware,
         # tolerating a missing directory). Fixed stand-in value.
@@ -103,6 +168,7 @@ def build(seed=None, qemu=False, highmem=False):
         # of the A11 that the iPhone X userland expects.
         ('unique-chip-id', struct.pack('<Q', SWEET_ECID)),
         ('chip-id', u32(0x8015)),
+        ('board-id', u32(0x06)),
         # Security status as on a dev-fused, undemoted board (tuple 0,0,1,1):
         # MobileGestalt reads these from /chosen, and mobileactivationd's
         # DeviceType then takes its native "Hactivation" branch (state
@@ -127,7 +193,7 @@ def build(seed=None, qemu=False, highmem=False):
             ph(),
             ('device_type', cstr('cpu')),
             # Keep the SWEET CPU driver's match until e1s CPU topology is known.
-            ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
+            ('compatible', cstr('samsung,exynos2400') + cstr('arm,armv8')),
             # The loader rewrites this to the live boot MPIDR before XNU starts.
             ('reg', u32(0)),
             ('cpu-id', u32(core)),
@@ -150,15 +216,17 @@ def build(seed=None, qemu=False, highmem=False):
 
     gic = node('gic', [
         ph(),
+        ('device_type', cstr('interrupt-controller')),
         ('compatible', cstr('arm,gic-v3')),
         ('interrupt-controller', b''),
+        ('#interrupt-cells', u32(3)),
         ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else VTIMER_INTID)),
         ('reg', u64(gicd - SOC_BASE, GICD_SIZE, gicr - SOC_BASE, GICR_SIZE)),
     ])
     arm_io = node('arm-io', [
         ph(),
-        ('device_type', cstr('sweet-io')),
-        ('compatible', cstr('sweet-io') + cstr('arm-io')),
+        ('device_type', cstr('e1s-io')),
+        ('compatible', cstr('samsung,e1s-io') + cstr('arm-io')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
         ('ranges', u64(0, SOC_BASE, 0x100000000 - SOC_BASE)),
@@ -194,12 +262,6 @@ def build(seed=None, qemu=False, highmem=False):
         ('reg', u64(UFS, UFS_SIZE)),
     ])
 
-    # pmap_compute_max_asids requires the node even when no overrides are set.
-    # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
-    # No effaceable storage: keybagd then reads /private/var/keybags/systembag.kb
-    # as a plain plist instead of decrypting it with the effaceable key.
-    defaults = node('defaults', [ph(), ('no-effaceable-storage', u32(1))])
-
     # MobileGestalt HomeButtonType = IODeviceTree:/buttons home-button-type
     # (D22AP: 2, no Home button; absent = 0 = Home-button device).
     buttons = node('buttons', [
@@ -217,19 +279,36 @@ def build(seed=None, qemu=False, highmem=False):
                          for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
+    # The same nodes HackiOS's loader adds for IOKit and iOS userland.
+    options = node('options', [ph()])
+    pram = node('pram', [ph(), ('reg', u64(PANIC_LOG_BASE, PANIC_LOG_SIZE))])
+    # pmap_compute_max_asids requires the node even when no overrides are set.
+    # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
+    # No effaceable storage: keybagd then reads /private/var/keybags/systembag.kb
+    # as a plain plist instead of decrypting it with the effaceable key.
+    kernel_defaults = node('defaults', [ph(), ('kern.vm_compressor', u32(2)),
+                                        ('no-effaceable-storage', u32(1))])
+
     # Identity of the iPhone X userland: compatible[0] is hw.model/hw.target
-    # (D22AP), model is hw.machine/hw.product (iPhone10,3). 'xiaomi,sweet'
-    # stays for SweetPlatformExpert matching; the e1s names are informational.
+    # (D22AP), model is hw.machine/hw.product (iPhone10,3).  This matches the
+    # root of the HackiOS loader's device tree rather than the old SWEET one.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('samsung,e1s') + cstr('samsung,exynos2400') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('AppleARM') + cstr('iPhone10,3')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
         ('manufacturer', cstr('Apple Inc.')),
+        ('device_type', cstr('bootrom')),
+        ('platform-name', cstr('t8015')),
+        ('serial-number', padded32('E1S00XNU0000001')),
+        ('mlb-serial-number', padded32('E1S00XNU0000001MLB')),
+        ('model-number', padded32('MQAC2')),
+        ('region-info', padded32('LL/A')),
+        ('regulatory-model-number', padded32('A1865')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+    ], [chosen, kernel_defaults, cpus, arm_io, fbcon, buttons, options, pram] + product + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':
