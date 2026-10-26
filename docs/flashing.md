@@ -152,21 +152,22 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `0e3a574dfbf52d924e0ab3ba5c8fd5e3c51ab0d5e7ef3b8e97dbc730f4012250`
+  `393c2a64e8e074b189707dcc6f14f736ee992257efcf378fbb3a4158233aa607`
 - `e1s-boot-touch.img`:
-  `a05673af6324ae70884fc7b5ec5fc3f31bcfd20bfad2e64f725bdb38abd39b1c`
+  `bedbcb22daeaa0e8ddf0630df09256a3914455354434a669d89ec221f9f8efb3`
 - `e1s-boot-touch.img.tar`:
-  `4325a14db2e6a35d63b0d138743ab6a5a726c81bfdefd1f695d38a1e8b2e0ee2`
+  `b67d90ca4460660fc12586833bf487ac64d84021879772bfdd6c64140457239e`
 
 The kernel payload at `0x1a000` now includes `0007` (ACPM/PMIC), `0008`
-(MAX77775 battery), `0009` (RTC calendar) and `0010` (display state). The
-command line has no `e1spmic`, `e1sbattery`, `e1srtc`, `e1sdisp`, `e1scam` or
-`rd=ufsroot0` argument, so the image uses the defaults: PMIC reads only
-(mode 1), battery reads only, RTC sets the calendar, the display report prints
-the framebuffer summary, no camera probe, no UFS root. Add `e1sdisp=2` only
-for a diagnostic boot that may read the DECON/DSIM block. The loader now scans
-all `/cpus` children, but the default ADT still has one CPU; the ten-core test
-image is `docs/e1s-smp.md`.
+(MAX77775 battery), `0009` (RTC calendar), `0010` (display state) and `0011`
+(persistent console ring). The command line has no `e1spmic`, `e1sbattery`,
+`e1srtc`, `e1sdisp`, `e1slog`, `e1scam` or `rd=ufsroot0` argument, so the
+image uses the defaults: PMIC reads only (mode 1), battery reads only, RTC
+sets the calendar, the display report prints the framebuffer summary, the log
+ring is on, no camera probe, no UFS root. Add `e1sdisp=2` only for a
+diagnostic boot that may read the DECON/DSIM block; `e1slog=0` disables the
+ring for a comparison boot. The loader now scans all `/cpus` children, but the
+default ADT still has one CPU; the ten-core test image is `docs/e1s-smp.md`.
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with
@@ -228,21 +229,29 @@ anything else.
 
 ## 5. Recover the RAM log
 
-The loader writes an ASCII record at physical `0x91200000` (Samsung's
-`sec_debug_next` reservation). The magic is `E1SXNU01`; the first 16 bytes are
-the header and the length is in bytes 8-11. The loader currently does not
-mirror XNU's `kprintf` output there, so the log contains the loader's own
-messages and the final `JUMP TO XNU` marker.
+Samsung's `sec_debug_next` reservation is 2 MiB at physical `0x91200000`.
+Two records live there:
+
+- the loader's ASCII log (`E1SXNU01`) at the base, with the final
+  `JUMP TO XNU` marker;
+- the XNU console ring (`E1SXNU02`) at `0x91300000`, in the second MiB. Once
+  `bsd_init` installs it, every character that reaches `_cnputs` is mirrored
+  there, including the display probe, PMIC/ACPM, UFS and panic output. Earlier
+  kernel output is not captured.
+
+Dump the whole 2 MiB so both records are included:
 
 ```sh
-adb shell "dd if=/dev/mem of=/sdcard/e1s-log.bin bs=4096 skip=594432 count=64"
+adb shell "dd if=/dev/mem of=/sdcard/e1s-log.bin bs=4096 skip=594432 count=512"
 adb pull /sdcard/e1s-log.bin
 python3 tools/e1s/read_log.py e1s-log.bin
 ```
 
-`594432 * 4096` is `0x91200000`. If `/dev/mem` is blocked by the recovery
-kernel, use the screen photograph and record that the log could not be read.
-Do not attempt to write to `/dev/mem`.
+`594432 * 4096` is `0x91200000`; 512 blocks is 2 MiB. `read_log.py` prints the
+loader record first and then the XNU ring, unwrapped if it has wrapped.
+If `/dev/mem` is blocked by the recovery kernel, use the screen photograph and
+record that the log could not be read. Do not attempt to write to `/dev/mem`.
+`e1slog=0` disables the XNU ring for a comparison boot.
 
 ## 6. Restore BOOT
 

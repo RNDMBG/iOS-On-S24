@@ -30,6 +30,7 @@ DTS revision may differ on the user's firmware.
 | PMU | `0x12860000` | Mu-Silicium memory map |
 | Boot framebuffer | `0xFA200000`, size `0x009A4000`, 1080x2340x32 | Mu-Silicium memory map |
 | Boot log | `0x91200000`, 2 MiB (`sec_debug_next`) | DTS `s5e9945-rmem.dtsi` |
+| XNU console ring | `0x91300000`, 1 MiB (second half of `sec_debug_next`) | e1s `0011` |
 | Kernel log | `0xFC911000`, 2 MiB | DTS `s5e9945-rmem.dtsi` |
 | Debug header | `0xFC900000`, 64 KiB | DTS `s5e9945-rmem.dtsi` |
 

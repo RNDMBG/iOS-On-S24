@@ -66,6 +66,7 @@ What is e1s-specific so far:
 | MAX77775 fuel gauge (read-only) | `0008` | builds, untested |
 | S2MPS27 RTC and calendar epoch | `0009` | builds, untested |
 | DECON/DSIM/RDMA framebuffer probe | `0010` | builds, untested |
+| Persistent console ring | `0011` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
@@ -352,9 +353,14 @@ From `s5e9945-rmem.dtsi` and the e1s board overlay:
 - `sec_rdx_bootdev`: `0x8_C0000000`, `0x0B800000`
 
 `0x91200000` is the first RAM log target. It is a Samsung debug reservation,
-not a proven pstore region. The probe writes an ASCII record there and leaves
-the phone halted so a recovery can read it through `/dev/mem`, a custom kernel
-module, or a small physical-memory reader.
+not a proven pstore region. The loader writes an ASCII record there. `0011`
+puts a second record at `0x91300000`: a 1 MiB ring that mirrors every
+character reaching the XNU console after `bsd_init`, including the display
+probe, PMIC/ACPM, UFS and panic output. Dump the full 2 MiB so both records
+are captured. The ring is mapped uncached with `ml_io_map`, so it does not
+depend on the UFS driver or the BSD disk stack; `e1slog=0` disables it. The
+loader excludes the whole 2 MiB reservation from the RAM window it publishes
+to XNU, so the kernel cannot allocate over either record.
 
 ### RAM
 
@@ -469,7 +475,8 @@ First flash:
 4. Flash only the BOOT slot with Odin; do not touch BL, AP, CP, CSC, EFS,
    or USERDATA.
 5. Let it boot the probe. Photograph the screen.
-6. Reboot to recovery and read the log at physical `0x91200000`.
+6. Reboot to recovery and dump 2 MiB at physical `0x91200000`; the loader
+   record is at the base and the XNU console ring at `0x91300000`.
 7. Restore the stock BOOT image before any further experiment if the probe
    does not run.
 
@@ -503,7 +510,8 @@ reference, not a drop-in.
 - Is `CNTFRQ_EL0` zero? If yes, the loader must supply 25.6 MHz.
 - Does the live DTB contain `/memory` and `/reserved-memory` nodes, or only
   what Samsung injects?
-- Is `0x91200000` safe to overwrite, and can the recovery read it?
+- Is `0x91200000` safe to overwrite, and can the recovery read it? Is the
+  second MiB at `0x91300000` really outside every firmware carve-out?
 - Which DRAM bank is free of firmware carve-outs for XNU?
 - Is an EL2 monitor active, and does it allow an EL1 payload to run?
 - Can the UFS host be driven after S-Boot, or does the loader need to

@@ -139,6 +139,11 @@ builds the real HackiOS base instead of the old SWEET series:
   and with `e1sdisp=2` reads (never writes) DECON0..3, the DECON0 windows,
   RDMA0..3, DSIM0/1 and the DCPHY0 PLL. The dump is opt-in because a read
   from a gated DPU block can hang the interconnect.
+- `xnu/e1s/patches/0011-e1s-log.patch`: mirrors every XNU console character
+  into a 1 MiB ring at `0x91300000`, inside Samsung's `sec_debug_next`
+  reservation. The loader's record stays at `0x91200000`; dumping 2 MiB from
+  there and running `tools/e1s/read_log.py` recovers the display probe even if
+  the screen stays black. `e1slog=0` disables it.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -157,7 +162,7 @@ builds the real HackiOS base instead of the old SWEET series:
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
   series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
-  battery/RTC/display/port-map/SMP checks. It does not build the kernel.
+  battery/RTC/display/log/port-map/SMP checks. It does not build the kernel.
 
 The driver-by-driver disposition of the HackiOS `redwood_*` tree (kept,
 gated, replaced, not applicable, or still missing) is in

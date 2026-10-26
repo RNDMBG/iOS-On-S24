@@ -55,10 +55,20 @@ python3 tools/e1s/verify_boot.py out/e1s-boot-smp.img \
 ```
 
 Keep the one-CPU image and its hashes; this is a separate diagnostic build.
+Both images carry `0011`, so the XNU ring is also present in this build; dump
+2 MiB at `0x91200000`.
+
+Produced with the current kernel:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `out/e1s-boot-smp.img` | 16,367,632 | `57eb8bd2d7ba39c7b31a419b34d32cf48a775f4c64ed1f6a31e30146009f0f24` |
+| `out/e1s-boot-smp.img.tar` | 16,373,760 | `043e0ef15ee5728d5398a0f8e36e0ef1746f0947128e12a8b4948cd3f237865c` |
 
 ## What to look for
 
-On the screen or in the `0x91200000` log:
+On the screen or in the 2 MiB dump at `0x91200000` (loader record plus XNU
+ring):
 
 - `GenericARMCPU: cpu 0..9 (phys id 0x...) registered` for each core.
 - `GenericARMPE: 10 of 10 processors are running` (or an honest smaller

@@ -19,6 +19,7 @@
 #define FB_H		2340U
 #define FB_STRIDE	(FB_W * 4U)
 #define LOG_BASE	0x91200000UL
+#define LOG_RESERVE	0x200000UL	/* sec_debug_next: loader log + XNU ring */
 #define LOG_MAGIC	"E1SXNU01"
 #define LOG_HEADER	16U
 #define LOG_MAX		0xff00U
@@ -278,7 +279,7 @@ choose_window(uintptr_t dtb, uintptr_t loader_image, uint64_t loader_size,
 	occ[nocc].base = fb_base;
 	occ[nocc++].size = fb_size;
 	occ[nocc].base = LOG_BASE;
-	occ[nocc++].size = 0x20000;
+	occ[nocc++].size = LOG_RESERVE;
 	occ[nocc].base = loader_image;
 	occ[nocc++].size = loader_size;
 	occ[nocc].base = dtb;

@@ -730,3 +730,52 @@ The SMP groundwork is in place but untested:
 The loader grew to 106,496 bytes, so the default BOOT payload moved to
 `0x1a000`; the image is 16,359,440 bytes and the tar is unchanged at
 16,363,520. Neither has been flashed.
+
+## 2026-10-26 - Persistent console ring
+
+The phone is still the daily driver, so a black screen cannot be the only
+result of a boot. `0011-e1s-log.patch` adds `bsd/dev/e1s_log.c` and hooks
+`_cnputs` in `osfmk/console/serial_console.c`:
+
+- The loader's `E1SXNU01` record stays at `0x91200000`, in the first MiB of
+  Samsung's 2 MiB `sec_debug_next` reservation.
+- The XNU ring lives at `0x91300000`, in the second MiB: a 40-byte
+  `E1SXNU02` header (`magic`, version, data offset, ring size, total bytes,
+  sequence) followed by the ring.
+- `ml_io_map` maps the ring uncached, so it works before UFS is mounted and
+  from panic context. `e1s_log_append` does not print, block or take a lock.
+- The loader's `choose_window` now excludes the whole 2 MiB
+  `sec_debug_next` range (`LOG_RESERVE`), not just the first 128 KiB, so XNU
+  cannot allocate over the ring.
+- `bsd_init` installs the ring immediately before `e1s_display_probe()`, so
+  the framebuffer summary, the opt-in DECON dump, PMIC/ACPM, UFS and a panic
+  are all captured. Output before `bsd_init` is not.
+- `e1slog=0` disables the ring; the loader record is unaffected.
+
+`tools/e1s/read_log.py` now parses both formats and unwraps the ring. Dump the
+whole 2 MiB (`dd ... bs=4096 skip=594432 count=512` from recovery); the parser
+prints the loader record first, then the ring. The synthetic wrapped-ring test
+caught a wrong first draft of the test fixture, not the parser; the fixture now
+writes bytes the way the kernel does (value `v` at `v % size`).
+
+The series applies cleanly on a fresh HackiOS base. All thirteen host checks
+pass, including `tools/e1s/test_e1s_log.py`; CI runs it and checks that
+`bsd/dev/e1s_log.c` exists after `apply.sh`.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,228,056 | `393c2a64e8e074b189707dcc6f14f736ee992257efcf378fbb3a4158233aa607` |
+| `out/e1s-boot-touch.img` | 16,359,440 | `bedbcb22daeaa0e8ddf0630df09256a3914455354434a669d89ec221f9f8efb3` |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 | `b67d90ca4460660fc12586833bf487ac64d84021879772bfdd6c64140457239e` |
+| `out/e1s-boot-smp.img` | 16,367,632 | `57eb8bd2d7ba39c7b31a419b34d32cf48a775f4c64ed1f6a31e30146009f0f24` |
+| `out/e1s-boot-smp.img.tar` | 16,373,760 | `043e0ef15ee5728d5398a0f8e36e0ef1746f0947128e12a8b4948cd3f237865c` |
+
+Both images include `0011`. The default command line is still
+`debug=0x14e cpus=1 keepsyms=1 -v`; the ring is on by default, and neither
+image has `e1sdisp=2`.
+
+Not device-tested: whether `0x91200000` is safe to write at all, whether the
+second MiB is outside every firmware carve-out, and whether the recovery can
+read the full 2 MiB through `/dev/mem`. No new image has been flashed.

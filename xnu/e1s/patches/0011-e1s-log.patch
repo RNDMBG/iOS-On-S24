@@ -1,0 +1,175 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index c15a50c..fdcae8c 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -114,6 +114,7 @@ bsd/dev/e1s_battery.c		standard
+ bsd/dev/e1s_camera.c		standard
+ bsd/dev/e1s_display.c		standard
+ bsd/dev/e1s_input.c		standard
++bsd/dev/e1s_log.c		standard
+ bsd/dev/e1s_pmic.c		standard
+ bsd/dev/e1s_touch.c		standard
+ bsd/dev/e1s_ufs.c		standard
+diff --git a/bsd/dev/e1s_log.c b/bsd/dev/e1s_log.c
+new file mode 100644
+index 0000000..48e347a
+--- /dev/null
++++ b/bsd/dev/e1s_log.c
+@@ -0,0 +1,113 @@
++/*
++ * e1s persistent console log (Samsung Galaxy S24, SM-S921B).
++ *
++ * The phone is also the daily driver, so a boot that shows nothing on the
++ * panel still has to leave evidence.  The loader already writes its own log
++ * at 0x91200000, Samsung's 2 MiB sec_debug_next reservation.  This driver
++ * uses the second MiB of that reservation for a ring of everything that
++ * reaches the XNU console: the display probe, PMIC/ACPM results, UFS, and a
++ * panic.  The loader's record at the base is left alone.
++ *
++ * The ring is mapped uncached with ml_io_map, so it works before the UFS
++ * driver and from panic context.  It is written by _cnputs (the same hook the
++ * old SWEET persistent log used).  Dump 2 MiB at 0x91200000 from the recovery
++ * and run tools/e1s/read_log.py on it; that prints both E1SXNU01 (loader) and
++ * E1SXNU02 (this ring).  `e1slog=0` disables it.
++ */
++#if defined(ARM64_BOARD_CONFIG_E1S)
++
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_LOG_PA          0x91300000UL   /* 0x91200000 + 1 MiB */
++#define E1S_LOG_SIZE        (1U << 20)
++#define E1S_LOG_DATA_OFF    0x100U
++#define E1S_LOG_RING_SIZE   (E1S_LOG_SIZE - E1S_LOG_DATA_OFF)
++#define E1S_LOG_VERSION     1U
++
++struct e1s_log_header {
++	char magic[8];
++	uint32_t version;
++	uint32_t data_off;
++	uint32_t size;
++	uint32_t reserved;
++	uint64_t total;
++	uint64_t seq;
++};
++
++static volatile uint8_t *e1s_log;
++static volatile uint64_t e1s_log_total;
++static volatile uint64_t e1s_log_seq;
++
++static void
++e1s_log_write_header(void)
++{
++	struct e1s_log_header header;
++
++	if (e1s_log == NULL) {
++		return;
++	}
++	memset(&header, 0, sizeof(header));
++	memcpy(header.magic, "E1SXNU02", 8);
++	header.version = E1S_LOG_VERSION;
++	header.data_off = E1S_LOG_DATA_OFF;
++	header.size = E1S_LOG_RING_SIZE;
++	header.total = e1s_log_total;
++	header.seq = e1s_log_seq;
++	memcpy((void *)e1s_log, &header, sizeof(header));
++}
++
++/*
++ * Called for every console output, in any context.  It must not block, print,
++ * or take a lock; a torn record is preferable to losing the earlier bytes.
++ */
++void
++e1s_log_append(const char *c, int size)
++{
++	uint64_t total;
++	uint32_t off;
++	int i;
++
++	if (e1s_log == NULL || c == NULL || size <= 0) {
++		return;
++	}
++	total = e1s_log_total;
++	off = (uint32_t)(total % E1S_LOG_RING_SIZE);
++	for (i = 0; i < size; i++) {
++		e1s_log[E1S_LOG_DATA_OFF + off] = (uint8_t)c[i];
++		if (++off == E1S_LOG_RING_SIZE) {
++			off = 0;
++		}
++	}
++	e1s_log_total = total + (uint64_t)size;
++	e1s_log_seq++;
++	e1s_log_write_header();
++}
++
++void
++e1s_log_init(void)
++{
++	uint32_t on = 1;
++
++	if (PE_parse_boot_argn("e1slog", &on, sizeof(on)) && on == 0) {
++		return;
++	}
++	e1s_log_total = 0;
++	e1s_log_seq = 0;
++	e1s_log = (volatile uint8_t *)ml_io_map(E1S_LOG_PA, E1S_LOG_SIZE);
++	if (e1s_log == NULL) {
++		printf("e1s-log: cannot map %#lx; console log disabled\n",
++		    E1S_LOG_PA);
++		return;
++	}
++	e1s_log_write_header();
++	printf("e1s-log: console ring at physical %#lx, %u KiB; "
++	    "dump 2 MiB at 0x91200000\n", E1S_LOG_PA,
++	    E1S_LOG_RING_SIZE >> 10);
++}
++
++#endif /* ARM64_BOARD_CONFIG_E1S */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 6900596..00809b7 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -99,6 +99,7 @@
+ extern void e1s_pmic_init(void);
+ extern void e1s_battery_init(void);
+ extern void e1s_display_probe(void);
++extern void e1s_log_init(void);
+ extern void e1s_ufs_probe(void);
+ extern void e1s_camera_probe(void);
+ #endif
+@@ -992,6 +993,7 @@ bsd_init(void)
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
+ #if defined(E1S)
++		e1s_log_init();                 /* persistent console ring at 0x91300000 */
+ 		e1s_display_probe();            /* framebuffer and, opt-in, DECON/DSIM */
+ 		e1s_pmic_init();                /* ACPM/PMIC probe; power-key source */
+ #endif
+diff --git a/osfmk/console/serial_console.c b/osfmk/console/serial_console.c
+index e5b23f2..7fd8957 100644
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -266,11 +266,19 @@ _cnputc(char c, bool poll)
+  *             waiting for an interrupt when the hardware device isn't ready
+  * @param size The number of characters to print to the console.
+  */
++#if defined(ARM64_BOARD_CONFIG_E1S)
++extern void e1s_log_append(const char *c, int size);  /* bsd/dev/e1s_log.c */
++#endif
++
+ static inline void
+ _cnputs(char *c, int size, bool poll)
+ {
+ 	extern int disableConsoleOutput;
+ 
++#if defined(ARM64_BOARD_CONFIG_E1S)
++	e1s_log_append(c, size);
++#endif
++
+ 	if (disableConsoleOutput) {
+ 		return;
+ 	}

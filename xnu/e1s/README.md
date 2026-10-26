@@ -17,6 +17,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0008-e1s-battery.patch` | builds, untested | read-only MAX77775 fuel gauge on `hsi2c_16` (`gpp8-0/1`), reported through HackiOS's `redwood_battery_report()` |
 | `0009-e1s-rtc.patch` | builds, untested | S2MPS27 RTC (binary fields), validated and handed to `clock_set_calendar_microtime()`; `e1srtc=0` disables the clock set |
 | `0010-e1s-display.patch` | builds, untested | framebuffer summary plus an opt-in read-only DECON0..3 / window / RDMA / DSIM0-1 / DCPHY0 dump; `e1sdisp=2` |
+| `0011-e1s-log.patch` | builds, untested | mirrors every `_cnputs` character into a 1 MiB ring at `0x91300000`; dump 2 MiB at `0x91200000`; `e1slog=0` disables |
 
 ### UFS (0005)
 
@@ -185,6 +186,26 @@ during `arm_init`, while `kernel_map == VM_MAP_NULL`, so
 `PE_initialize_console(NULL, ...)`; it never feeds the raw boot-args address
 back to `initialize_screen()` after `kernel_map` exists. Setting bit 0 would
 only matter for that later call, which does not happen.
+
+### Persistent console log (0011)
+
+`0011-e1s-log.patch` adds `bsd/dev/e1s_log.c` and hooks `_cnputs` in
+`osfmk/console/serial_console.c`. The first MiB of Samsung's `sec_debug_next`
+reservation at `0x91200000` remains the loader's `E1SXNU01` record; the second
+MiB (`0x91300000`) is a 1 MiB ring with a 40-byte `E1SXNU02` header. Every
+character that reaches the XNU console after `bsd_init` installs the ring is
+copied there, in any context, without a lock or a block. The ring is mapped
+uncached with `ml_io_map`, so it works before UFS is mounted and from a panic.
+Output produced before `bsd_init` is not captured; the loader's record is the
+only evidence for that window. `shim/e1s-xnu/loader.c` excludes the entire
+2 MiB `sec_debug_next` range from the RAM window it publishes to XNU, so the
+kernel cannot allocate over the loader record or the ring.
+
+The point is the phone: even if the panel stays black, the display probe,
+PMIC/ACPM, UFS and panic output can be read back from recovery. Dump 2 MiB at
+`0x91200000` and run `tools/e1s/read_log.py`; it prints the loader record and
+the unwrapped XNU ring. `e1slog=0` turns the ring off without changing
+anything else.
 
 ### SMP (optional)
 

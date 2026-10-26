@@ -25,7 +25,7 @@ jobs:
     # SDK (see xnu/e1s/README.md).  This job verifies the thing that
     # breaks most often: that the pinned HackiOS base and every e1s patch still
     # apply to xnu-8796.121.2, plus the host-side
-    # ADT/touch/PMIC/battery/RTC/display checks.
+    # ADT/touch/PMIC/battery/RTC/display/log checks.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -43,6 +43,7 @@ jobs:
           python3 tools/e1s/test_e1s_battery.py
           python3 tools/e1s/test_e1s_rtc.py
           python3 tools/e1s/test_e1s_display.py
+          python3 tools/e1s/test_e1s_log.py
           python3 tools/e1s/test_e1s_port_map.py
           python3 tools/e1s/test_e1s_smp.py
 
@@ -58,6 +59,7 @@ jobs:
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_acpm.c"
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_pmic.c"
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_battery.c"
+          test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_log.c"
           git -C "$RUNNER_TEMP/xnu-src" diff --stat
 
       - name: Summary
