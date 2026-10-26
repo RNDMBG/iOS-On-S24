@@ -127,10 +127,72 @@ S2DOS05. UFS uses `l8_reg` (VCC) and `s4_l5_reg` (VCCQ). Touch uses `l18_reg`
 (I/O) and `l9_reg` (AVDD). Panel VCI is `l10_reg` (3.0 V) and VDD3 is `l17_reg`
 (1.8 V).
 
-Do not hardcode S8 PM6150/PM6150L SPMI addresses. e1s PMIC traffic goes through
-the ACPM MFD buses, and the AP-side ACPM mailbox must be initialized first.
+| Rail | PMIC | SID / type | Control | Use |
+| --- | --- | --- | --- | --- |
+| LDO8 | S2MPS27 | `0x0d` / `0x1d` | `0x33` | UFS VCC |
+| LDO9 | S2MPS27 | `0x0d` / `0x1d` | `0x34` | touch AVDD, 3.0 V |
+| LDO10 | S2MPS27 | `0x0d` / `0x1d` | `0x35` | panel VCI, 3.0 V |
+| LDO17 | S2MPS27 | `0x0d` / `0x1d` | `0x3c` | panel VDD3, 1.8 V |
+| LDO18 | S2MPS27 | `0x0d` / `0x1d` | `0x3d` | touch I/O, 1.8 V |
+| LDO5 | S2MPS28 sub-4 | `0x0b` / `0x5f` | `0x86`, voltage `0x87` | UFS VCCQ |
 
-## 5. Touch
+S2MPS27 LDO control bits `[5:0]` select the voltage and `[7:6] = 0b11` enable
+the rail. The groups used here are 1.8 V + 25 mV steps (LDO9/LDO10) and
+1.5 V + 12.5 mV steps (LDO17/LDO18). S2MPS28 sub-4 puts the voltage selector
+in `OUT1` and the enable bits in `CTRL`.
+
+The board PMIC nodes use ACPM MFD channel 2. The AP2APM mailbox is at
+`0x12B90000`; the S-Boot-created channel table is in the APM SRAM at
+`0x02055000 + 0x9D00`. XNU reuses that table rather than reinitializing the
+APM firmware. `xnu/e1s/patches/0007-e1s-pmic.patch` reads the S2MPS27 chip ID,
+status and RTC, can enable the touch/panel rails with `e1spmic=2`/`3`, and adds
+the PMIC power key to the input queue.
+
+Do not hardcode S8 PM6150/PM6150L SPMI addresses. e1s PMIC traffic goes through
+ACPM channel 2; `0007` reuses the mailbox and the channel table that S-Boot
+left behind instead of reinitializing the APM firmware.
+
+## 5. Battery and charger
+
+The charger, fuel gauge and USB-C controller are one Maxim MAX77775 MFD on
+`hsi2c_16` (`0x11070000`, USI08) at 7-bit address `0x66`. The MFD exposes
+the fuel gauge at `0x36` and the charger at `0x69` on the same bus. The board
+wires that bus to `gpp8-0` (SCL) and `gpp8-1` (SDA) at PERIC1 `+0xc0`,
+function 2. The interrupt is `gpa0-0`.
+
+| Item | Value | Source |
+| --- | --- | --- |
+| MFD / charger / gauge | MAX77775, `hsi2c_16`, `0x66` / `0x69` / `0x36` | DTS, driver |
+| Bus pins | `gpp8-0` SCL, `gpp8-1` SDA, PERIC1 `+0xc0` | DTS, pinctrl |
+| IRQ | `gpa0-0` (`0x12850020`, bit 0) | DTS |
+| Sense resistor code | `fuelgauge,fg_resistor = <5>` = 2 mOhm (`10 mOhm / Rsense`) | DTS, driver |
+| Current LSB | `15625 * 5 / 100 = 781.25 uA` | Driver |
+| Capacity LSB | `5 / 2 = 2.5 mAh` | Driver |
+
+Fuel-gauge registers used by the monitor:
+
+| Register | Address | Meaning |
+| --- | --- | --- |
+| `STATUS` | `0x00` | bit 3 (`BST`) set means the battery is absent |
+| `REPCAP` | `0x05` | remaining capacity, 2.5 mAh per LSB |
+| `REPSOC` | `0x06` | state of charge, 0.1 % |
+| `TEMP` | `0x08` | 1 C per high byte, 0.0390625 C per low byte |
+| `VCELL` | `0x09` | 12-bit mantissa and 4-bit exponent, 78.125 uV per LSB |
+| `CURRENT` | `0x0A` | signed, 781.25 uA per LSB |
+| `FULLCAP` | `0x10` | learned full charge, 2.5 mAh per LSB |
+| `CYCLES` | `0x17` | charge cycles |
+| `DESIGNCAP` | `0x18` | design capacity, 2.5 mAh per LSB |
+
+The charger's `CHG_INT_OK` register is `0xB2`: bit 2 `BATP_OK`, bit 4
+`CHG_OK`, bit 5 `WCIN_OK`, bit 6 `CHGIN_OK`.
+
+`xnu/e1s/patches/0008-e1s-battery.patch` reads these registers over a
+bit-banged I2C bus and feeds `redwood_battery_report()`. It never writes the
+charger or the gauge, so the charging limits and protection stay owned by
+S-Boot and the PMIC firmware. It is read-only and off only with
+`e1sbattery=0`.
+
+## 6. Touch
 
 The current generated board DTS contains the touch node directly; the commented
 include points at a generated `input_stm_spi.dtsi` that is not present in this
@@ -194,13 +256,13 @@ Samsung's STM SPI framing (`drivers/input/sec_input/stm_spi/stm_spi.c`):
 - Device ID `0x22` returns two characters and a 3-byte ID; panel info `0x23`
   returns TX/RX channel counts at bytes 8/9.
 
-Touch is powered by PMIC LDO18 (I/O) and LDO9 (AVDD).  The rails are normally
-enabled by Samsung's Android PMIC driver, not by S-Boot; the current XNU port
-cannot reach the AP-side ACPM mailbox, so a device-ID read may return
-`0x00`/`0xff` until that is implemented.  There is no reset GPIO in the board
-node; power cycling is the reset.
+Touch is powered by PMIC LDO18 (I/O) and LDO9 (AVDD). Samsung's Android driver
+enables them; whether S-Boot leaves them on is unknown. `0007` can enable them
+explicitly with `e1spmic=2`, but the first image only reads the PMIC (mode 1),
+so a device-ID read may return `0x00`/`0xff` until the rails are known to be
+on. There is no reset GPIO in the board node; power cycling is the reset.
 
-## 6. Display
+## 7. Display
 
 | Block | Address | Source |
 | --- | --- | --- |
@@ -221,7 +283,7 @@ region of at least 4 MiB, and uses its base/size/width/height/stride for
 driver needs DECON + DSIM + panel power sequencing. `hsi2c_43` is the
 front-camera EEPROM bus in the e1s board files, not the display bus.
 
-## 7. UFS
+## 8. UFS
 
 From `s5e9945-ufs.dtsi`:
 
@@ -261,7 +323,7 @@ both the legacy UTRL list and MCQ queue 0, but it has not been tested on the
 phone. Its first image only prints the register summary at `bsd_init`; it does
 not use `rd=ufsroot0`.
 
-## 8. Cameras
+## 9. Cameras
 
 From `arch/arm64/boot/dts/exynos/s5e9945-camera.dtsi` and the
 `arch/arm64/boot/dts/samsung/e1s/camera/` overlay (`s5e9945-e1s_camera.dtsi`):
@@ -320,7 +382,7 @@ Neither is part of the presence probe.
 start MCLK, program the PHY, or capture a frame. The patch passes its host
 test, but no sensor has been powered or read on the phone yet.
 
-## 9. USB
+## 10. USB
 
 | Block | Address | Source |
 | --- | --- | --- |
@@ -331,7 +393,7 @@ test, but no sensor has been powered or read on the phone yet.
 The controller is DWC3. The e1s board uses a PMIC GPIO for USB connection
 switching. USB is not part of the first key/display milestone.
 
-## 10. Driver implications
+## 11. Driver implications
 
 1. The volume-up driver can be self-contained: map ALIVE, read `0x12850064`
    bit 0 every 20 ms, debounce two consecutive samples, and call
@@ -349,7 +411,7 @@ switching. USB is not part of the first key/display milestone.
    and a userland surface interface. A bus/ID probe is the only safe first
    step until the rails and MCLKs are controlled.
 
-## 11. Device observations still missing
+## 12. Device observations still missing
 
 - Actual `CurrentEL`, `SCTLR_EL1`, `CNTFRQ_EL0`, `MPIDR_EL1`, and `x0` on S-Boot
   entry.
@@ -363,7 +425,7 @@ switching. USB is not part of the first key/display milestone.
 - Which DRAM banks are free of firmware carve-outs.
 - Whether an EL2 monitor intercepts PSCI, GIC, or the ACPM mailbox.
 
-## 12. DRAM reservations (from `s5e9945-rmem.dtsi` + the e1s board DTS)
+## 13. DRAM reservations (from `s5e9945-rmem.dtsi` + the e1s board DTS)
 
 The static DTS has no `/memory` node; Samsung's bootloader adds it. The
 reserved-memory node uses 2 address cells and 1 size cell, so each `reg` is

@@ -9,9 +9,9 @@ replace assumptions with device evidence.
 ## 0. Status against the old checklist
 
 The old feature list is not an e1s acceptance checklist. The repository now has
-the probe plus experimental XNU scaffolding (`0082`-`0085`), but no
-hardware-validated e1s driver and no XNU boot. The table describes the original
-probe baseline.
+the HackiOS-based e1s series (`0001`-`0008`), but no hardware-validated e1s
+driver and no XNU boot. The table describes the original probe baseline and
+what has replaced it so far.
 
 | Item | Older port assumption | S24 e1s reality | Current e1s code |
 | --- | --- | --- | --- |
@@ -22,18 +22,19 @@ probe baseline.
 | Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
 | Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
 | Cameras | Qualcomm CSI | Exynos CSIS/ISP, 4 sensors | presence probe, untested |
-| RTC | S2MPS17 | S2MPS27/28 PMIC set | none |
-| Buttons | Bixby key | no Bixby; volume-up only | `e1s_input.c`, untested |
+| RTC | S2MPS17 | S2MPS27/28 PMIC set | S2MPS27 RTC read, untested (`0007`) |
+| Buttons | Bixby key | no Bixby; volume-up, PMIC power key | `e1s_input.c`, untested |
+| Battery | older fuel gauge | MAX77775 | read-only monitor, untested (`0008`) |
 | USB | older USB | e1s USB | none |
 | Graphics | software | software only planned | none |
 | XNU | older patched tree | HackiOS iOS 16.5 base | `E1S` kernel builds; not booted |
 | iOS userland/UI | older userland | not present | none |
 
-If the probe runs, it proves only that S-Boot accepted the BOOT image, the
-payload executed at the expected exception level, the framebuffer address was
-usable, the GIC/UFS ID registers were readable, and the RAM log could be
-written. It does **not** prove UFS storage, touch, RTC, USB, interrupts, MMU,
-SMP, XNU entry, or any iOS userland.
+If the XNU handoff image runs, it proves only that S-Boot accepted the BOOT
+image, the loader selected a RAM window and framebuffer, the payload executed
+at the expected exception level, and the early XNU console reached `bsd_init`.
+It does **not** prove UFS storage, touch, PMIC access, battery, RTC, USB,
+interrupt delivery beyond the boot CPU, MMU, SMP, or any iOS userland.
 
 ## 0.1 XNU base: HackiOS iOS 16.5, not the SWEET series
 
@@ -61,13 +62,16 @@ What is e1s-specific so far:
 | STM SPI9 touch | `0003` | builds, untested |
 | UFS 4.0/MCQ read-only root | `0005` | builds, untested |
 | Camera presence probe | `0006` | builds, untested |
+| ACPM mailbox, PMIC reads, power key | `0007` | builds, untested |
+| MAX77775 fuel gauge (read-only) | `0008` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
-Not ported: PMIC/ACPM (including the touch LDOs, the UFS rails, and every
-camera rail), camera MCLKs/CSIS capture/ISP, RTC, USB, battery, and any SMP
-configuration beyond the boot CPU. The UFS driver and the camera presence
-probe exist but have not been exercised on the phone.
+Not ported: PMIC rail control beyond the opt-in touch/panel writes, camera
+MCLKs/CSIS capture/ISP, charger control, USB, audio output, and any SMP
+configuration beyond the boot CPU. The UFS driver, the camera presence probe,
+the ACPM mailbox, and the fuel gauge exist but have not been exercised on the
+phone.
 
 ## 1. Source facts
 
@@ -86,6 +90,16 @@ Relevant files:
   `arch/arm64/boot/dts/samsung/e1s/camera/` - CSIS/ISP blocks and the four
   sensor modules.
 - `arch/arm64/boot/dts/exynos/s5e9945-rmem.dtsi` - reserved memory.
+- `arch/arm64/boot/dts/exynos/s5e9945-acpm.dtsi` - AP2APM mailbox, APM SRAM,
+  ACPM timer and MFD buses.
+- `arch/arm64/boot/dts/exynos/board/erd/erd9945-pmic.dtsi` - S2MPS27 on bus0,
+  S2MPS28 sub-4 on bus4, and the other PMIC nodes.
+- `drivers/soc/samsung/acpm/acpm_ipc.c` and `acpm_mfd_spmi.c` - mailbox
+  queues and the SPMI command bitfields.
+- `drivers/regulator/samsung/pmic/s2mps27_regulator.c` and
+  `s2mps28_4_regulator.c` - LDO control and voltage groups.
+- `drivers/mfd/maxim/max77775.c`, `drivers/battery/fuelgauge/max77775_fuelgauge/`
+  - MAX77775 addresses, register map and conversions.
 - `arch/arm64/boot/dts/exynos/s5e9945-drm-dpu.dtsi` - DECON/DSIM/DPU.
 - `arch/arm64/boot/dts/samsung/s5e9945_common.dtsi` - common board overlay.
 - `arch/arm64/boot/dts/samsung/e1s/s5e9945-e1s_common.dtsi` - e1s keys, UFS
@@ -284,6 +298,39 @@ pixels.
   firmware `tsp_stm/fts2ba61y_e1s.bin` (or `fts2ba61c_e1.bin` for a later
   revision). Rails are L18 (I/O) and L9 (AVDD) on the PMIC.
 
+### ACPM and PMIC
+
+- AP2APM mailbox: `0x12B90000`, 4 KiB. APM SRAM: `0x02055000`, `0x3A000`
+  bytes. The firmware's channel table is at SRAM offset `0x9D00`; the board
+  PMIC nodes use channel 2 (`acpm-ipc-channel = <2>`).
+- S2MPS27 (main): SID `0x0d`, MFD type `0x1d`, RTC type `0x04`, ADC `0x0a`.
+- S2MPS28 sub-4: SID `0x0b`, MFD type `0x5f`.
+- S2MPS27 LDO control: `[5:0]` selects the voltage, `[7:6] = 0b11` enables.
+  The touch rails are LDO9 (`0x34`, 3.0 V, group 1.8 V + 25 mV) and LDO18
+  (`0x3d`, 1.8 V, group 1.5 V + 12.5 mV); the panel rails are LDO10 (`0x35`)
+  and LDO17 (`0x3c`).
+- S2MPS28 sub-4 LDO5 uses `CTRL 0x86` for enable and `OUT1 0x87` for the
+  voltage selector; it supplies UFS VCCQ.
+- The power key is the S2MPS27 `PWRON` status bit (`STATUS1 0x0a`, bit 0),
+  not an AP GPIO. XNU polls it because the PMIC IRQ is not routed yet.
+
+The mailbox is only a transport. The channels, queue lengths and buffer
+addresses are the ones the APM firmware published at boot; the driver checks
+every range against the 0x3A000-byte SRAM window before it uses an offset.
+`e1s-acpm` prints one line per channel so a firmware mismatch is visible in
+the first log.
+
+### Battery and charger
+
+- MAX77775 MFD on `hsi2c_16` at `0x66`; fuel gauge `0x36`, charger `0x69`.
+- Bus pins `gpp8-0` (SCL) and `gpp8-1` (SDA), PERIC1 `+0xc0`; IRQ `gpa0-0`.
+- `fuelgauge,fg_resistor = <5>` is Samsung's `10 mOhm / Rsense` code, so the
+  e1s 2 mOhm sense resistor gives 781.25 uA per current LSB and 2.5 mAh per
+  capacity LSB.
+- The monitor reads `STATUS`, `REPSOC`, `VCELL`, `CURRENT`, `TEMP`, `REPCAP`,
+  `FULLCAP`, `CYCLES` and `DESIGNCAP`, and never writes a charger or gauge
+  register.
+
 ### Reserved memory relevant to logging
 
 From `s5e9945-rmem.dtsi` and the e1s board overlay:
@@ -452,6 +499,17 @@ reference, not a drop-in.
   UFS clocks and L8/S4-L5 rails on across the handoff?
 - Does S-Boot leave any camera rail or MCLK on, and which SDA/SCL pin order do
   the four sensor buses actually use?
+- Does the APM firmware in the user's bootloader publish the same 48-byte
+  channel descriptor and PMIC channel 2 table that Samsung's Linux driver
+  expects? `e1s-acpm` prints every channel before it sends anything.
+- Are the touch rails LDO9/LDO18 already on after S-Boot, and is `e1spmic=2`
+  needed at all? The first image reads them and leaves them alone.
+- Does the MAX77775 answer on `gpp8-0`/`gpp8-1` in the DTS order, and is the
+  bus powered across the handoff? A missing ACK is a printed line, not a
+  panic.
+- Does the S2MPS27 `PWRON` status bit reflect the key's current state, or does
+  it latch until the PMIC interrupt is cleared? The power-key path is polled
+  and untested.
 - Which retail DTS revision matches the user's SM-S921B firmware?
 - Does the bootloader accept a boot v4 image with a ramdisk, or is a
   separate recovery/init_boot path required?

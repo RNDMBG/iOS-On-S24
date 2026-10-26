@@ -63,10 +63,13 @@ Checked means the item exists in the repository and passes its host checks.
       lookup and a `ufsroot0` root hook (untested).
 - [x] Wrote an opt-in camera presence probe for the four SM-S921B sensors
       (bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture).
+- [x] Wrote the AP2APM mailbox and S2MPS27/S2MPS28 driver: read-only by
+      default, opt-in touch/panel rails, PMIC power key in the input queue.
+- [x] Wrote a read-only MAX77775 fuel-gauge monitor on `hsi2c_16`.
 - [x] Generated an iOS 16.5 D22AP ADT with NVRAM, `/options`, `/pram`, and the
       iPhone X `/product` tree.
 - [x] Added `tools/e1s/verify_boot.py` and host tests for the ADT, FDT parser,
-      keys, touch protocol, UFS patch, and camera probe.
+      keys, touch protocol, UFS, camera, PMIC, and battery code.
 - [ ] First BOOT-only flash and a real screen photo plus `0x91200000` log.
 - [ ] An XNU kernel that has been booted on this phone.
 - [ ] A UFS root device verified on hardware. The driver handles both the
@@ -121,6 +124,14 @@ builds the real HackiOS base instead of the old SWEET series:
   buses, reset/MCLK pads, and CSIS channels. It bit-bangs the sensor I2C bus
   to read a chip ID and only reads CSIS registers with `e1scam=2`. It does not
   power the camera rails or start MCLK, and it does not capture frames.
+- `xnu/e1s/patches/0007-e1s-pmic.patch`: the AP2APM mailbox and S2MPS27 /
+  S2MPS28 access. It reads the PMIC chip IDs, status and RTC, adds the PMIC
+  power key to the input queue, can enable the touch or panel rails with
+  `e1spmic=2`/`3`, and gates the Qualcomm audio and camera sinks.
+- `xnu/e1s/patches/0008-e1s-battery.patch`: a read-only MAX77775 fuel-gauge
+  monitor on `hsi2c_16` (`gpp8-0/1`). It reports state of charge, voltage,
+  current, temperature and capacity through HackiOS's
+  `redwood_battery_report()`; it never writes the charger or gauge.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -138,9 +149,8 @@ builds the real HackiOS base instead of the old SWEET series:
 - `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
-  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC
-  checks.
-  It does not build the kernel.
+  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
+  battery checks. It does not build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,

@@ -124,15 +124,22 @@ This build produced:
 | File | Size |
 | --- | ---: |
 | `shim/e1s-xnu/out/Image` | 102,400 bytes |
-| `out/e1s-boot-touch.img` | 16,334,864 bytes |
-| `out/e1s-boot-touch.img.tar` | 16,343,040 bytes |
+| `out/e1s-boot-touch.img` | 16,355,344 bytes |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 bytes |
 
 This build's SHA-256 values:
 
+- `mach.development.e1s`:
+  `c43bb43bfcf73ccb2eb1ff286f9ab3aba407768d5b83ce740731933c05f29c36`
 - `e1s-boot-touch.img`:
-  `42651b88f51713d6b1bc8dac1ca7bda13124ef1794f852cea405b640ff078727`
+  `9b766da556ec34af5c56cf957b2ad80ac53500c2dd51a2af22b1502b1ed5b9d7`
 - `e1s-boot-touch.img.tar`:
-  `7bc4e01dcd2f0f91ff763578f11e782227df7a09b42721d63589e1e4ad5630ea`
+  `fa99c268d6f2a50146d64bceacc0843a09ba6b9f44ad0732cf0b7d87533a4b2e`
+
+The kernel payload at `0x19000` now includes `0007` (ACPM/PMIC) and `0008`
+(MAX77775 battery). The command line has no `e1spmic`, `e1sbattery`, `e1scam`
+or `rd=ufsroot0` argument, so the image uses the defaults: PMIC reads only
+(mode 1), battery reads only, no camera probe, no UFS root.
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with
@@ -160,22 +167,37 @@ chose, the segment copies, the ADT and `boot_args` addresses, and
 `JUMP TO XNU`.
 
 After the jump, XNU should print its early console and then `bsd_init` calls
-`e1s_ufs_probe()`, which prints an `e1s-ufs:` register summary (CAP, HCS/HCE,
-`MEM_CFG` legacy/MCQ mode, and queue 0 state). The first image has no
-`rd=ufsroot0`, so the expected end of this test is a missing-root stop after
-that summary, not iOS boot. The UFS summary is register evidence, not a UFS
-command test. The camera probe is not called because `e1scam` is absent.
+`e1s_pmic_init()` before the input driver. Expect `e1s-acpm:` lines describing
+the APM channel table, then `e1s-pmic:` chip IDs, status and RTC. If the mailbox
+or firmware layout differs, these lines stop with a printed reason and the boot
+continues.
+
+Next comes the UFS summary from `e1s_ufs_probe()` (CAP, HCS/HCE, `MEM_CFG`
+legacy/MCQ mode, and queue 0 state), then `e1s-battery:` from the MAX77775
+fuel gauge. The first image has no `rd=ufsroot0`, so the expected end of this
+test is a missing-root stop after those summaries, not iOS boot. The UFS
+summary is register evidence, not a UFS command test. The camera probe is not
+called because `e1scam` is absent.
 
 Photograph the entire screen after at least 60 seconds. Record whether:
 
 - the loader text appears at all (if not, the framebuffer address or the
   boot image is wrong);
 - the screen changes after `JUMP TO XNU` (XNU took over the video console);
+- the `e1s-acpm:` and `e1s-pmic:` lines appear, and what the channel dump and
+  chip IDs say;
 - the `e1s-ufs:` lines appear and what mode they report;
+- the `e1s-battery:` lines appear and whether the fuel gauge answers;
 - the phone reboots, hangs, or shows a panic.
 
 A black screen is a failure even if the log can be read. Do not describe the
 test as a boot without a screen photo.
+
+If the console stops inside `e1s-acpm` or `e1s-pmic`, rebuild the same image
+with `e1spmic=0 e1sbattery=0` added to both `--cmdline` arguments. That leaves
+the PMIC and fuel-gauge code compiled but not run, and isolates the display,
+UFS and touch path. The same image can then be flashed again without changing
+anything else.
 
 ## 5. Recover the RAM log
 

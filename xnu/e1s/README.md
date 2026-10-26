@@ -13,6 +13,8 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0004-e1s-display.patch` | not needed yet | HackiOS's `MiniIOMobileFramebuffer` already uses `boot_args.video`; the loader supplies it and finds it in the S-Boot DTB |
 | `0005-e1s-ufs.patch` | builds, untested | S5E9945 UFS 4.0/MCQ read-only root device: HCI `0x17100000`, SQD `0x17140000`, GPT partition lookup, `rd=ufsroot0` |
 | `0006-e1s-camera.patch` | builds, untested | SM-S921B camera presence probe: four sensors, bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture |
+| `0007-e1s-pmic.patch` | builds, untested | AP2APM mailbox, S2MPS27/S2MPS28 register access, PMIC power key, optional touch/panel rails, gate the Qualcomm audio/camera sinks |
+| `0008-e1s-battery.patch` | builds, untested | read-only MAX77775 fuel gauge on `hsi2c_16` (`gpp8-0/1`), reported through HackiOS's `redwood_battery_report()` |
 
 ### UFS (0005)
 
@@ -71,6 +73,44 @@ What is missing before a frame can be captured:
 
 `0006` compiles and passes `tools/e1s/test_e1s_camera.py`. No camera register
 has been written and no sensor has been powered on the phone.
+
+### ACPM and PMIC (0007)
+
+`0007-e1s-pmic.patch` adds `bsd/dev/e1s_acpm.c`, `bsd/dev/e1s_pmic.c` and
+`bsd/sys/e1s_pmic.h`.
+
+The AP does not own the PMIC bus. S-Boot starts an always-on APM firmware that
+owns the SPMI bus to the S2MPS27/S2MPS28 PMICs. XNU talks to it through the
+AP2APM mailbox at `0x12B90000` and reuses the channel table the firmware built
+at `0x02055000 + 0x9D00`; it does not reinitialize the firmware.
+
+- Reads the S2MPS27/S2MPS28-4 chip IDs, S2MPS27 status, and the S2MPS27 RTC.
+- `e1spmic=0` disables everything; `e1spmic=1` (the default) only reads.
+- `e1spmic=2` also enables the touch rails LDO9 (AVDD, 3.0 V) and LDO18
+  (I/O, 1.8 V). This is the first path that writes a PMIC register.
+- `e1spmic=3` enables the touch rails and the panel rails LDO10 (VCI, 3.0 V)
+  and LDO17 (VDD3, 1.8 V).
+- `e1spmic=4` reports the UFS VCC/VCCQ rails without changing any rail.
+- The S2MPS27 power key is added to the common input queue as
+  `REDWOOD_BUTTON_LOCK`, on the same debounce path as the volume-up key.
+- The Qualcomm speaker, haptic, torch, and camera sinks are gated out of
+  `redwood_audio_init()` on e1s.
+
+The PMIC driver only writes in modes 2 and 3, and only the two rails in the
+selected mode. Keep it at mode 1 for the first display test.
+
+### Battery (0008)
+
+`0008-e1s-battery.patch` adds `bsd/dev/e1s_battery.c`, a read-only MAX77775
+fuel-gauge monitor. The MFD is at `0x66` on `hsi2c_16`; the gauge is `0x36` and
+the charger `0x69`; the bus is bit-banged on `gpp8-0` (SCL) and `gpp8-1`
+(SDA). It reads `STATUS`, `REPSOC`, `VCELL`, `CURRENT`, `TEMP`, `REPCAP`,
+`FULLCAP`, `CYCLES`, and `DESIGNCAP`, and hands the values to HackiOS's
+`redwood_battery_report()`. It never writes a charger or gauge register.
+`e1sbattery=0` disables it.
+
+The first image can leave the battery monitor on: it is read-only and its
+failure is a printed line, not a panic.
 
 ## Build
 

@@ -1,0 +1,544 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 79f6a07..f5487bb 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -110,6 +110,7 @@ bsd/dev/unix_startup.c			standard
+ 
+ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/e1s_acpm.c		standard
++bsd/dev/e1s_battery.c		standard
+ bsd/dev/e1s_camera.c		standard
+ bsd/dev/e1s_input.c		standard
+ bsd/dev/e1s_pmic.c		standard
+diff --git a/bsd/dev/e1s_battery.c b/bsd/dev/e1s_battery.c
+new file mode 100644
+index 0000000..89d47e9
+--- /dev/null
++++ b/bsd/dev/e1s_battery.c
+@@ -0,0 +1,506 @@
++/*
++ * e1s battery and charger monitor (Samsung Galaxy S24, SM-S921B).
++ *
++ * The charger/fuel-gauge is a Maxim MAX77775.  The MFD answers at 7-bit
++ * address 0x66 on hsi2c_16; the fuel gauge is at 0x36 and the charger at
++ * 0x69 on the same bus.  The board wires that bus to gpp8-0 (SCL) and
++ * gpp8-1 (SDA), which is USI08 in PERIC1.
++ *
++ * S-Boot leaves the chip running, because it is what charges the phone.
++ * This driver only reads it, over a bit-banged I2C bus; it never writes a
++ * charger register, so the charging limits and the protection stay owned by
++ * the firmware.  The readings are handed to HackiOS's power-source layer
++ * through redwood_battery_report(), which creates the RedwoodBattery
++ * IOPMPowerSource on the first report.
++ *
++ * The conversions are Samsung's, from
++ * drivers/battery/fuelgauge/max77775_fuelgauge/max77775_fuelgauge.c:
++ *
++ *   REPSOC    0.1 %
++ *   VCELL     78.125 uV per LSB (12-bit mantissa plus 4-bit exponent)
++ *   CURRENT   1.5625 uV / Rsense per LSB
++ *   TEMP      1 C per high-byte LSB plus 0.0390625 C per low byte
++ *   capacity  0.5 mAh * (10 mOhm / Rsense) per LSB
++ *
++ * e1s sets fuelgauge,fg_resistor = <5>, Samsung's code for a 2 mOhm sense
++ * resistor (fg_resistor = 10 mOhm / Rsense).  One current LSB is therefore
++ * 15625 * 5 / 100 = 781.25 uA and one capacity LSB is 5 / 2 = 2.5 mAh.
++ *
++ * Boot arguments:
++ *   e1sbattery=0  do not probe the fuel gauge
++ *   e1sbattery=1  read it (default)
++ */
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/errno.h>
++#include <sys/redwood_input.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_PERIC1_GPIO         0x11030000UL
++#define E1S_GPP8_CON            0xC0U
++#define E1S_GPP8_DAT            0xC4U
++#define E1S_GPP8_PUD            0xC8U
++#define E1S_I2C_SCL_PIN         0U
++#define E1S_I2C_SDA_PIN         1U
++#define E1S_I2C_DELAY_US        5U
++
++#define E1S_PIN_INPUT           0U
++#define E1S_PIN_OUTPUT          1U
++
++#define E1S_MAX77775_FG_ADDR    0x36U   /* 0x6C on the wire */
++#define E1S_MAX77775_CHG_ADDR   0x69U   /* 0xD2 on the wire */
++
++#define E1S_FG_STATUS           0x00U
++#define E1S_FG_REPCAP           0x05U
++#define E1S_FG_REPSOC           0x06U
++#define E1S_FG_TEMP             0x08U
++#define E1S_FG_VCELL            0x09U
++#define E1S_FG_CURRENT          0x0AU
++#define E1S_FG_FULLCAP          0x10U
++#define E1S_FG_CYCLES           0x17U
++#define E1S_FG_DESIGNCAP        0x18U
++#define E1S_FG_STATUS_BST       (1U << 3)
++
++#define E1S_CHG_INT_OK          0xB2U
++#define E1S_CHG_INT_OK_BATP     (1U << 2)
++#define E1S_CHG_INT_OK_CHG      (1U << 4)
++#define E1S_CHG_INT_OK_WCIN     (1U << 5)
++#define E1S_CHG_INT_OK_CHGIN    (1U << 6)
++
++#define E1S_FG_RESISTOR         5U      /* 10 mOhm / 2 mOhm sense resistor */
++
++struct e1s_i2c_state {
++	uint32_t con;
++	uint32_t pud;
++	uint32_t dat;
++};
++
++static volatile uint32_t *e1s_gpp8;
++static bool e1s_battery_up;
++static unsigned e1s_battery_polls;
++static unsigned e1s_battery_errors;
++static bool e1s_battery_quiet;
++
++static uint32_t
++pin_shift(uint32_t pin)
++{
++	return (pin & 7U) * 4U;
++}
++
++static uint32_t
++bank_read(uint32_t offset)
++{
++	return *(volatile uint32_t *)((uint8_t *)e1s_gpp8 + offset);
++}
++
++static void
++bank_write(uint32_t offset, uint32_t value)
++{
++	*(volatile uint32_t *)((uint8_t *)e1s_gpp8 + offset) = value;
++}
++
++static void
++pin_function(uint32_t pin, uint32_t function)
++{
++	uint32_t value = bank_read(E1S_GPP8_CON);
++	uint32_t shift = pin_shift(pin);
++
++	value &= ~(0xfU << shift);
++	value |= (function & 0xfU) << shift;
++	bank_write(E1S_GPP8_CON, value);
++}
++
++static void
++pin_output_low(uint32_t pin)
++{
++	uint32_t value = bank_read(E1S_GPP8_DAT);
++
++	value &= ~(1U << (pin & 7U));
++	bank_write(E1S_GPP8_DAT, value);
++	pin_function(pin, E1S_PIN_OUTPUT);
++}
++
++static void
++pin_input(uint32_t pin)
++{
++	pin_function(pin, E1S_PIN_INPUT);
++}
++
++static void
++pin_pull_none(uint32_t pin)
++{
++	uint32_t value = bank_read(E1S_GPP8_PUD);
++	uint32_t shift = pin_shift(pin);
++
++	value &= ~(0xfU << shift);
++	bank_write(E1S_GPP8_PUD, value);
++}
++
++static uint32_t
++pin_read_dat(uint32_t pin)
++{
++	return (bank_read(E1S_GPP8_DAT) >> (pin & 7U)) & 1U;
++}
++
++static void
++i2c_delay(void)
++{
++	delay(E1S_I2C_DELAY_US);
++}
++
++static void
++i2c_scl_low(void)
++{
++	pin_output_low(E1S_I2C_SCL_PIN);
++}
++
++static void
++i2c_scl_release(void)
++{
++	pin_input(E1S_I2C_SCL_PIN);
++}
++
++static void
++i2c_sda_low(void)
++{
++	pin_output_low(E1S_I2C_SDA_PIN);
++}
++
++static void
++i2c_sda_release(void)
++{
++	pin_input(E1S_I2C_SDA_PIN);
++}
++
++static uint32_t
++i2c_sda_read(void)
++{
++	return pin_read_dat(E1S_I2C_SDA_PIN);
++}
++
++static void
++i2c_start(void)
++{
++	i2c_sda_release();
++	i2c_scl_release();
++	i2c_delay();
++	i2c_sda_low();
++	i2c_delay();
++	i2c_scl_low();
++	i2c_delay();
++}
++
++static void
++i2c_stop(void)
++{
++	i2c_scl_low();
++	i2c_sda_low();
++	i2c_delay();
++	i2c_scl_release();
++	i2c_delay();
++	i2c_sda_release();
++	i2c_delay();
++}
++
++static void
++i2c_write_bit(uint32_t bit)
++{
++	if (bit) {
++		i2c_sda_release();
++	} else {
++		i2c_sda_low();
++	}
++	i2c_delay();
++	i2c_scl_release();
++	i2c_delay();
++	i2c_scl_low();
++	i2c_delay();
++}
++
++static uint32_t
++i2c_read_bit(void)
++{
++	uint32_t bit;
++
++	i2c_sda_release();
++	i2c_delay();
++	i2c_scl_release();
++	i2c_delay();
++	bit = i2c_sda_read();
++	i2c_scl_low();
++	i2c_delay();
++	return bit;
++}
++
++static int
++i2c_write_byte(uint8_t value)
++{
++	int bit;
++
++	for (bit = 7; bit >= 0; bit--) {
++		i2c_write_bit((value >> bit) & 1U);
++	}
++	/* The ninth clock is the slave's ACK: SDA low. */
++	return i2c_read_bit() == 0 ? 0 : EIO;
++}
++
++static uint8_t
++i2c_read_byte(bool ack)
++{
++	uint8_t value = 0;
++	int bit;
++
++	for (bit = 0; bit < 8; bit++) {
++		value = (uint8_t)((value << 1) | i2c_read_bit());
++	}
++	i2c_write_bit(ack ? 0 : 1);
++	return value;
++}
++
++static void
++i2c_begin(struct e1s_i2c_state *state)
++{
++	state->con = bank_read(E1S_GPP8_CON);
++	state->pud = bank_read(E1S_GPP8_PUD);
++	state->dat = bank_read(E1S_GPP8_DAT);
++
++	/* The external I2C pull-ups drive the lines; no internal pull. */
++	pin_pull_none(E1S_I2C_SCL_PIN);
++	pin_pull_none(E1S_I2C_SDA_PIN);
++	i2c_sda_release();
++	i2c_scl_release();
++	i2c_delay();
++
++	/*
++	 * If the chip or the bootloader was interrupted mid-byte it can hold
++	 * SDA low.  Clock it free before the first start condition.
++	 */
++	for (int i = 0; i < 9 && !i2c_sda_read(); i++) {
++		i2c_scl_release();
++		i2c_delay();
++		i2c_scl_low();
++		i2c_delay();
++	}
++	i2c_stop();
++}
++
++static void
++i2c_end(const struct e1s_i2c_state *state)
++{
++	/* CON last: until it is restored the pin must not drive the bus. */
++	bank_write(E1S_GPP8_DAT, state->dat);
++	bank_write(E1S_GPP8_PUD, state->pud);
++	bank_write(E1S_GPP8_CON, state->con);
++}
++
++static int
++i2c_read_regs(uint8_t address, uint8_t reg, uint8_t *buffer, unsigned count)
++{
++	struct e1s_i2c_state state;
++	unsigned i;
++	int error;
++
++	i2c_begin(&state);
++
++	i2c_start();
++	error = i2c_write_byte((uint8_t)(address << 1));
++	if (error == 0) {
++		error = i2c_write_byte(reg);
++	}
++	if (error != 0) {
++		i2c_end(&state);
++		return error;
++	}
++
++	i2c_start();
++	error = i2c_write_byte((uint8_t)((address << 1) | 1U));
++	if (error != 0) {
++		i2c_end(&state);
++		return error;
++	}
++
++	for (i = 0; i < count; i++) {
++		buffer[i] = i2c_read_byte(i + 1 < count);
++	}
++	i2c_stop();
++	i2c_end(&state);
++	return 0;
++}
++
++static int
++i2c_read8(uint8_t address, uint8_t reg, uint8_t *value)
++{
++	return i2c_read_regs(address, reg, value, 1);
++}
++
++static int
++i2c_read16(uint8_t address, uint8_t reg, uint16_t *value)
++{
++	uint8_t data[2];
++	int error;
++
++	error = i2c_read_regs(address, reg, data, 2);
++	if (error != 0) {
++		return error;
++	}
++	*value = (uint16_t)(data[0] | (data[1] << 8));
++	return 0;
++}
++
++static int
++fg_read(const char *name, uint8_t reg, uint16_t *value)
++{
++	int error = i2c_read16(E1S_MAX77775_FG_ADDR, reg, value);
++
++	if (error != 0 && !e1s_battery_quiet) {
++		printf("e1s-battery: %s read failed (%d)\n", name, error);
++	}
++	return error;
++}
++
++static int
++battery_poll(void)
++{
++	struct redwood_battery_state state;
++	uint16_t status, repcap, repsoc, temp, vcell, current;
++	uint16_t fullcap, cycles, designcap;
++	uint8_t chg_int_ok = 0;
++	int32_t voltage_mv, current_ma, temperature_milli, soc_01;
++	int64_t magnitude, ua;
++
++	if (!e1s_battery_up) {
++		return ENXIO;
++	}
++	if (fg_read("status", E1S_FG_STATUS, &status) != 0 ||
++	    fg_read("repsoc", E1S_FG_REPSOC, &repsoc) != 0 ||
++	    fg_read("vcell", E1S_FG_VCELL, &vcell) != 0 ||
++	    fg_read("current", E1S_FG_CURRENT, &current) != 0 ||
++	    fg_read("temp", E1S_FG_TEMP, &temp) != 0 ||
++	    fg_read("repcap", E1S_FG_REPCAP, &repcap) != 0 ||
++	    fg_read("fullcap", E1S_FG_FULLCAP, &fullcap) != 0 ||
++	    fg_read("cycles", E1S_FG_CYCLES, &cycles) != 0 ||
++	    fg_read("designcap", E1S_FG_DESIGNCAP, &designcap) != 0) {
++		if (!e1s_battery_quiet && ++e1s_battery_errors >= 3) {
++			printf("e1s-battery: giving up on per-register lines; "
++			    "still polling\n");
++			e1s_battery_quiet = true;
++		}
++		return EIO;
++	}
++	e1s_battery_errors = 0;
++	e1s_battery_quiet = false;
++	(void)i2c_read8(E1S_MAX77775_CHG_ADDR, E1S_CHG_INT_OK, &chg_int_ok);
++
++	voltage_mv = (int32_t)(((vcell & 0xFFF) * 78125) / 1000000) +
++	    (int32_t)((((vcell & 0xF000) >> 4) * 78125 / 1000000) << 4);
++
++	soc_01 = ((repsoc >> 8) * 100 + ((repsoc & 0xFF) * 100 / 256)) / 10;
++	if (soc_01 < 0) {
++		soc_01 = 0;
++	} else if (soc_01 > 1000) {
++		soc_01 = 1000;
++	}
++
++	magnitude = current;
++	if (magnitude & 0x8000) {
++		magnitude = (~magnitude & 0xFFFF) + 1;
++		magnitude = -magnitude;
++	}
++	ua = magnitude * 15625 * E1S_FG_RESISTOR / 100;
++	current_ma = (int32_t)((ua + (ua >= 0 ? 500 : -500)) / 1000);
++
++	if (temp & 0x8000) {
++		temperature_milli = -((int32_t)((~(temp >> 8) & 0xFF) + 1) * 1000) -
++		    ((int32_t)((~temp & 0xFF) + 1) * 39 / 10);
++	} else {
++		temperature_milli = (int32_t)((temp >> 8) & 0x7F) * 1000 +
++		    (int32_t)(temp & 0xFF) * 39 / 10;
++	}
++
++	state.size = sizeof(state);
++	state.percent_hundredths = soc_01 * 10;
++	state.voltage_uv = voltage_mv * 1000;
++	state.current_ua = (int32_t)ua;
++	state.temperature_hundredths = temperature_milli / 10;
++	state.present = (status & E1S_FG_STATUS_BST) == 0 ||
++	    (chg_int_ok & E1S_CHG_INT_OK_BATP) != 0;
++	state.external = (chg_int_ok & (E1S_CHG_INT_OK_CHGIN |
++	    E1S_CHG_INT_OK_WCIN)) != 0;
++	state.status = (chg_int_ok & E1S_CHG_INT_OK_CHG) ? 1 :
++	    state.external ? 3 : 2;
++	state.charge_uah = (int32_t)((uint32_t)repcap *
++	    E1S_FG_RESISTOR / 2) * 1000;
++	state.full_uah = (int32_t)((uint32_t)fullcap *
++	    E1S_FG_RESISTOR / 2) * 1000;
++	state.design_uah = (int32_t)((uint32_t)designcap *
++	    E1S_FG_RESISTOR / 2) * 1000;
++	state.cycles = cycles;
++	state.usb_type = 0;
++	state.usb_voltage_uv = 0;
++	state.usb_current_ua = 0;
++
++	if ((e1s_battery_polls++ % 12) == 0) {
++		printf("e1s-battery: %d.%d%%, %d mV, %d mA, %d.%02d C, "
++		    "present=%d charger=%d status=%d\n",
++		    soc_01 / 10, soc_01 % 10, voltage_mv, current_ma,
++		    temperature_milli / 1000, (temperature_milli % 1000) / 10,
++		    state.present, state.external, state.status);
++	}
++
++	redwood_battery_report(&state);
++	return 0;
++}
++
++static void
++battery_thread(void *arg __unused, wait_result_t result __unused)
++{
++	for (;;) {
++		(void)battery_poll();
++		delay_for_interval(5000, NSEC_PER_MSEC);
++	}
++}
++
++void
++e1s_battery_init(void)
++{
++	struct e1s_i2c_state state;
++	uint32_t enabled = 1;
++	thread_t thread;
++	bool ready;
++
++	if (PE_parse_boot_argn("e1sbattery", &enabled, sizeof(enabled)) &&
++	    enabled == 0) {
++		printf("e1s-battery: disabled (e1sbattery=0)\n");
++		return;
++	}
++
++	e1s_gpp8 = (volatile uint32_t *)ml_io_map(E1S_PERIC1_GPIO, 0x1000);
++	if (e1s_gpp8 == NULL) {
++		printf("e1s-battery: cannot map PERIC1 GPIO\n");
++		return;
++	}
++
++	/* Leave the pins as they were until the first real transfer. */
++	i2c_begin(&state);
++	delay(100);
++	ready = i2c_sda_read() != 0;
++	i2c_end(&state);
++
++	if (!ready) {
++		printf("e1s-battery: SDA is low; fuel gauge bus not usable\n");
++		return;
++	}
++	e1s_battery_up = true;
++
++	if (kernel_thread_start(battery_thread, NULL, &thread) == KERN_SUCCESS) {
++		printf("e1s-battery: MAX77775 fuel gauge at 0x36 on gpp8-0/1\n");
++		thread_deallocate(thread);
++	} else {
++		printf("e1s-battery: no thread\n");
++	}
++}
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 71bd6cc..6e9b811 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -97,6 +97,7 @@
+ 
+ #if defined(E1S)
+ extern void e1s_pmic_init(void);
++extern void e1s_battery_init(void);
+ extern void e1s_ufs_probe(void);
+ extern void e1s_camera_probe(void);
+ #endif
+@@ -996,6 +997,7 @@ bsd_init(void)
+ #if defined(E1S)
+ 		e1s_ufs_probe();                /* read-only UFS register summary */
+ 		e1s_camera_probe();             /* opt-in camera presence probe */
++		e1s_battery_init();             /* MAX77775 fuel gauge (read-only) */
+ #endif
+ 		redwood_audio_init();           /* /dev/redwood-audio */
+ 		redwood_virtio_blk_init();      /* /dev/rvblk0, a disk image of the host (QEMU) */

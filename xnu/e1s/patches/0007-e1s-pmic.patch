@@ -1,0 +1,1022 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 7395c79..79f6a07 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,8 +109,10 @@ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+ 
+ bsd/dev/monotonic.c optional monotonic
++bsd/dev/e1s_acpm.c		standard
+ bsd/dev/e1s_camera.c		standard
+ bsd/dev/e1s_input.c		standard
++bsd/dev/e1s_pmic.c		standard
+ bsd/dev/e1s_touch.c		standard
+ bsd/dev/e1s_ufs.c		standard
+ bsd/dev/redwood_input.c		standard
+diff --git a/bsd/dev/e1s_acpm.c b/bsd/dev/e1s_acpm.c
+new file mode 100644
+index 0000000..c347ca7
+--- /dev/null
++++ b/bsd/dev/e1s_acpm.c
+@@ -0,0 +1,481 @@
++/*
++ * e1s ACPM mailbox and PMIC bus (Samsung Galaxy S24, SM-S921B).
++ *
++ * The application processor does not own the PMIC bus.  S-Boot starts an
++ * always-on firmware ("APM") on the S5E9945, and that firmware owns the SPMI
++ * bus to the S2MPS27/S2MPS28 PMICs.  XNU talks to it through the AP2APM
++ * mailbox at 0x12B90000 and the APM SRAM at 0x02055000.
++ *
++ * The firmware has already built the channel table in SRAM when S-Boot hands
++ * over.  This driver does not reinitialize the firmware: it reads the table,
++ * finds the PMIC channel (channel 2 on this board), and reuses the queue
++ * descriptors the firmware published.  That is the same arrangement Linux
++ * uses in drivers/soc/samsung/acpm/acpm_ipc.c, without the Linux device
++ * model and workqueues.
++ *
++ * Only the commands the PMIC driver asks for are sent.  A read is one command
++ * and one response; a write is the same round trip.  Nothing is written to
++ * the PMIC unless the caller asks for it, and the PMIC driver keeps writes
++ * behind a boot argument.
++ *
++ * The queue fields in the channel descriptor are named from the APM's point
++ * of view: its rx_* fields are the AP's transmit queue, and its tx_* fields
++ * are the AP's receive queue.  This driver names them from the AP's side.
++ *
++ * Mailbox register layout (APM is the mailbox master on e1s):
++ *   INTGR0 +0x08  interrupt generate, master -> APM, bits [31:16]
++ *   INTCR1 +0x20  interrupt clear, APM -> master, bits [7:0]
++ *   INTMR1 +0x24  interrupt mask
++ *   INTSR1 +0x28  interrupt status
++ */
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/errno.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++#include <sys/e1s_pmic.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_ACPM_MAILBOX_PA     0x12B90000UL
++#define E1S_ACPM_MAILBOX_SIZE   0x1000UL
++#define E1S_ACPM_SRAM_PA        0x02055000UL
++#define E1S_ACPM_SRAM_SIZE      0x3A000UL
++#define E1S_ACPM_INITDATA_OFF   0x9D00U
++#define E1S_ACPM_CHANNEL_STRIDE 48U
++#define E1S_ACPM_CHANNEL_PMIC   2U
++
++#define E1S_ACPM_INTGR0         0x08U
++#define E1S_ACPM_INTCR0         0x0CU
++#define E1S_ACPM_INTMR0         0x10U
++#define E1S_ACPM_INTSR0         0x14U
++#define E1S_ACPM_INTGR1         0x1CU
++#define E1S_ACPM_INTCR1         0x20U
++#define E1S_ACPM_INTMR1         0x24U
++#define E1S_ACPM_INTSR1         0x28U
++
++#define E1S_ACPM_FW_IPC_CHANNELS        0x08U
++#define E1S_ACPM_FW_IPC_AP_MAX          0x18U
++#define E1S_ACPM_FW_IPC_BASE            0x34U
++
++#define E1S_ACPM_CMD_WORDS              4U
++#define E1S_ACPM_SEQ_MAX                64U
++#define E1S_ACPM_POLL_LIMIT             50000U
++#define E1S_ACPM_POLL_SLEEP_US          10U
++
++#define E1S_ACPM_MFD_FUNC_READ          0U
++#define E1S_ACPM_MFD_FUNC_WRITE         1U
++#define E1S_ACPM_MFD_FUNC_UPDATE        2U
++
++struct e1s_acpm_channel {
++	bool     valid;
++	uint8_t  id;
++	uint8_t  type;
++	uint8_t  q_len;
++	uint8_t  elem_size;
++	uint8_t  ap_poll;
++	uint32_t rx_rear;
++	uint32_t rx_front;
++	uint32_t rx_base;
++	uint32_t tx_rear;
++	uint32_t tx_front;
++	uint32_t tx_base;
++};
++
++static volatile uint32_t *e1s_acpm_mbox;
++static volatile uint8_t  *e1s_acpm_sram;
++static lck_grp_t         *e1s_acpm_lock_group;
++static lck_mtx_t         *e1s_acpm_lock;
++static struct e1s_acpm_channel e1s_acpm_pmic;
++static bool               e1s_acpm_up;
++static uint32_t           e1s_acpm_seq;
++
++static inline uint32_t
++e1s_acpm_read32(uint32_t off)
++{
++	return *(volatile uint32_t *)(e1s_acpm_sram + off);
++}
++
++static inline void
++e1s_acpm_write32(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(e1s_acpm_sram + off) = value;
++}
++
++static inline void
++e1s_acpm_mbox_write(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)((uint8_t *)e1s_acpm_mbox + off) = value;
++}
++
++static inline uint32_t
++e1s_acpm_mbox_read(uint32_t off)
++{
++	return *(volatile uint32_t *)((uint8_t *)e1s_acpm_mbox + off);
++}
++
++static void
++e1s_acpm_sync(void)
++{
++	__sync_synchronize();
++}
++
++static bool
++e1s_acpm_range_ok(uint32_t base, uint32_t count, uint32_t elem)
++{
++	uint64_t end;
++
++	if (count == 0 || count > 64 || elem < E1S_ACPM_CMD_WORDS * 4 ||
++	    elem > 64 || (elem & 3) != 0) {
++		return false;
++	}
++	end = (uint64_t)base + (uint64_t)count * elem;
++	return base < E1S_ACPM_SRAM_SIZE && end <= E1S_ACPM_SRAM_SIZE;
++}
++
++static void
++e1s_acpm_clear_irq(void)
++{
++	uint32_t bit = 1U << e1s_acpm_pmic.id;
++
++	e1s_acpm_mbox_write(E1S_ACPM_INTCR1, bit);
++	e1s_acpm_sync();
++}
++
++static int
++e1s_acpm_wait_irq(uint32_t seq)
++{
++	uint32_t bit = 1U << e1s_acpm_pmic.id;
++	uint32_t spin;
++
++	for (spin = 0; spin < E1S_ACPM_POLL_LIMIT; spin++) {
++		if (e1s_acpm_mbox_read(E1S_ACPM_INTSR1) & bit) {
++			return 0;
++		}
++		delay(E1S_ACPM_POLL_SLEEP_US);
++	}
++	printf("e1s-acpm: no interrupt for sequence %u (INTSR1=0x%08x)\n",
++	    seq, e1s_acpm_mbox_read(E1S_ACPM_INTSR1));
++	return ETIMEDOUT;
++}
++
++static int
++e1s_acpm_take_response(uint32_t seq, uint32_t *cmd)
++{
++	struct e1s_acpm_channel *ch = &e1s_acpm_pmic;
++	uint32_t front, rear, i;
++	uint8_t *slot;
++	unsigned word;
++
++	front = e1s_acpm_read32(ch->rx_front);
++	rear = e1s_acpm_read32(ch->rx_rear);
++	if (front >= ch->q_len || rear >= ch->q_len) {
++		printf("e1s-acpm: bad rx queue front=%u rear=%u len=%u\n",
++		    front, rear, ch->q_len);
++		return EIO;
++	}
++
++	for (i = rear; i != front; i = (i + 1) % ch->q_len) {
++		slot = (uint8_t *)(e1s_acpm_sram + ch->rx_base + i * ch->elem_size);
++		if (((*(volatile uint32_t *)slot >> 16) & 0x3fU) != seq) {
++			continue;
++		}
++
++		for (word = 0; word < E1S_ACPM_CMD_WORDS; word++) {
++			cmd[word] = *(volatile uint32_t *)(slot + word * 4);
++		}
++		e1s_acpm_sync();
++
++		/*
++		 * Remove the matched entry the way the Linux driver does: move
++		 * the oldest entry into its place, then advance the rear.  The
++		 * queue is small and this keeps unrelated responses intact.
++		 */
++		if (i != rear) {
++			uint8_t *old = (uint8_t *)(e1s_acpm_sram + ch->rx_base +
++			    rear * ch->elem_size);
++			for (word = 0; word < E1S_ACPM_CMD_WORDS; word++) {
++				*(volatile uint32_t *)(slot + word * 4) =
++				    *(volatile uint32_t *)(old + word * 4);
++			}
++		}
++		e1s_acpm_sync();
++		e1s_acpm_write32(ch->rx_rear, (rear + 1) % ch->q_len);
++		e1s_acpm_sync();
++		e1s_acpm_clear_irq();
++		return 0;
++	}
++
++	return EAGAIN;
++}
++
++static int
++e1s_acpm_send_locked(uint32_t *cmd)
++{
++	struct e1s_acpm_channel *ch = &e1s_acpm_pmic;
++	uint32_t front, rear, next, seq, spin, word;
++	uint8_t *slot;
++	int error;
++
++	if (!e1s_acpm_up) {
++		return ENXIO;
++	}
++
++	front = e1s_acpm_read32(ch->tx_front);
++	rear = e1s_acpm_read32(ch->tx_rear);
++	if (front >= ch->q_len || rear >= ch->q_len) {
++		return EIO;
++	}
++
++	for (spin = 0;; spin++) {
++		/* The APM advances its rx_rear as it consumes our commands. */
++		rear = e1s_acpm_read32(ch->tx_rear);
++		if (rear >= ch->q_len) {
++			return EIO;
++		}
++		next = front + 1;
++		if (next >= ch->q_len) {
++			next = 0;
++		}
++		if (next != rear) {
++			break;
++		}
++		if (spin >= E1S_ACPM_POLL_LIMIT) {
++			printf("e1s-acpm: tx queue full (front=%u rear=%u)\n", front, rear);
++			return ETIMEDOUT;
++		}
++		delay(E1S_ACPM_POLL_SLEEP_US);
++	}
++
++	seq = e1s_acpm_seq + 1;
++	if (seq >= E1S_ACPM_SEQ_MAX) {
++		seq = 1;
++	}
++	e1s_acpm_seq = seq;
++	cmd[0] = (cmd[0] & ~(0x3fU << 16)) | (seq << 16);
++
++	slot = (uint8_t *)(e1s_acpm_sram + ch->tx_base + front * ch->elem_size);
++	for (word = 0; word < E1S_ACPM_CMD_WORDS; word++) {
++		*(volatile uint32_t *)(slot + word * 4) = cmd[word];
++	}
++	e1s_acpm_sync();
++
++	e1s_acpm_write32(ch->tx_front, next);
++	e1s_acpm_sync();
++
++	e1s_acpm_clear_irq();
++	e1s_acpm_mbox_write(E1S_ACPM_INTGR0, (1U << ch->id) << 16);
++	e1s_acpm_sync();
++
++	error = e1s_acpm_wait_irq(seq);
++	if (error != 0) {
++		return error;
++	}
++
++	for (spin = 0; spin < E1S_ACPM_POLL_LIMIT; spin++) {
++		error = e1s_acpm_take_response(seq, cmd);
++		if (error == 0) {
++			return 0;
++		}
++		if (error != EAGAIN) {
++			return error;
++		}
++		delay(E1S_ACPM_POLL_SLEEP_US);
++	}
++
++	printf("e1s-acpm: response for sequence %u did not arrive\n", seq);
++	return ETIMEDOUT;
++}
++
++static int
++e1s_acpm_send(uint32_t *cmd)
++{
++	int error;
++
++	lck_mtx_lock(e1s_acpm_lock);
++	error = e1s_acpm_send_locked(cmd);
++	lck_mtx_unlock(e1s_acpm_lock);
++	return error;
++}
++
++bool
++e1s_acpm_ready(void)
++{
++	return e1s_acpm_up;
++}
++
++void
++e1s_acpm_probe(void)
++{
++	uint32_t channels, count, i, base;
++	uint32_t found = 0;
++
++	if (e1s_acpm_up) {
++		return;
++	}
++
++	if (e1s_acpm_lock == NULL) {
++		e1s_acpm_lock_group = lck_grp_alloc_init("e1s-acpm", LCK_GRP_ATTR_NULL);
++		e1s_acpm_lock = lck_mtx_alloc_init(e1s_acpm_lock_group, LCK_ATTR_NULL);
++	}
++
++	e1s_acpm_mbox = (volatile uint32_t *)ml_io_map(E1S_ACPM_MAILBOX_PA,
++	    E1S_ACPM_MAILBOX_SIZE);
++	e1s_acpm_sram = (volatile uint8_t *)ml_io_map(E1S_ACPM_SRAM_PA,
++	    E1S_ACPM_SRAM_SIZE);
++	if (e1s_acpm_mbox == NULL || e1s_acpm_sram == NULL) {
++		printf("e1s-acpm: cannot map mailbox/SRAM\n");
++		return;
++	}
++
++	channels = e1s_acpm_read32(E1S_ACPM_INITDATA_OFF + E1S_ACPM_FW_IPC_CHANNELS);
++	count = *(volatile uint8_t *)(e1s_acpm_sram + E1S_ACPM_INITDATA_OFF +
++	    E1S_ACPM_FW_IPC_AP_MAX);
++	printf("e1s-acpm: SRAM %08lx channels=%u count=%u ipc_base=0x%x\n",
++	    (unsigned long)E1S_ACPM_SRAM_PA, channels, count,
++	    e1s_acpm_read32(E1S_ACPM_INITDATA_OFF + E1S_ACPM_FW_IPC_BASE));
++
++	if (count == 0 || count > 64 ||
++	    channels >= E1S_ACPM_SRAM_SIZE) {
++		printf("e1s-acpm: firmware channel table is not usable\n");
++		return;
++	}
++
++	for (i = 0; i < count; i++) {
++		uint8_t *slot;
++		uint8_t id, type, q_len, elem, ap_poll;
++		uint32_t ch;
++
++		base = channels + i * E1S_ACPM_CHANNEL_STRIDE;
++		if (base + E1S_ACPM_CHANNEL_STRIDE > E1S_ACPM_SRAM_SIZE) {
++			printf("e1s-acpm: channel %u is outside SRAM\n", i);
++			break;
++		}
++		slot = (uint8_t *)(e1s_acpm_sram + base);
++		id = slot[0];
++		type = slot[9];
++		ch = base + 12;
++		q_len = slot[ch + 28];
++		elem = slot[ch + 29];
++		ap_poll = slot[base + 44];
++		found++;
++
++		/*
++		 * The descriptor is written from the APM's point of view:
++		 * its tx_* queues are the AP's receive side, and its rx_*
++		 * queues are the AP's transmit side.
++		 */
++		printf("e1s-acpm: ch%u id=%u type=%u len=%u elem=%u poll=%u "
++		    "aprx=0x%x/%u/%u aptx=0x%x/%u/%u\n",
++		    i, id, type, q_len, elem, ap_poll,
++		    e1s_acpm_read32(ch + 24), e1s_acpm_read32(ch + 16),
++		    e1s_acpm_read32(ch + 20),
++		    e1s_acpm_read32(ch + 12), e1s_acpm_read32(ch + 4),
++		    e1s_acpm_read32(ch + 8));
++
++		if (id != E1S_ACPM_CHANNEL_PMIC) {
++			continue;
++		}
++		if (!e1s_acpm_range_ok(e1s_acpm_read32(ch + 24), q_len, elem) ||
++		    !e1s_acpm_range_ok(e1s_acpm_read32(ch + 12), q_len, elem)) {
++			printf("e1s-acpm: channel 2 queues are outside SRAM\n");
++			return;
++		}
++
++		e1s_acpm_pmic.valid = true;
++		e1s_acpm_pmic.id = id;
++		e1s_acpm_pmic.type = type;
++		e1s_acpm_pmic.q_len = q_len;
++		e1s_acpm_pmic.elem_size = elem;
++		e1s_acpm_pmic.ap_poll = ap_poll;
++		/* AP RX: the APM's tx_* fields. */
++		e1s_acpm_pmic.rx_rear = e1s_acpm_read32(ch + 16);
++		e1s_acpm_pmic.rx_front = e1s_acpm_read32(ch + 20);
++		e1s_acpm_pmic.rx_base = e1s_acpm_read32(ch + 24);
++		/* AP TX: the APM's rx_* fields. */
++		e1s_acpm_pmic.tx_rear = e1s_acpm_read32(ch + 4);
++		e1s_acpm_pmic.tx_front = e1s_acpm_read32(ch + 8);
++		e1s_acpm_pmic.tx_base = e1s_acpm_read32(ch + 12);
++	}
++
++	if (!e1s_acpm_pmic.valid) {
++		printf("e1s-acpm: PMIC channel 2 was not found\n");
++		return;
++	}
++
++	e1s_acpm_up = true;
++	e1s_acpm_clear_irq();
++	printf("e1s-acpm: PMIC channel ready (%u channels scanned)\n", found);
++}
++
++int
++e1s_acpm_mfd_read(uint8_t sid, uint8_t type, uint8_t reg, uint8_t *value)
++{
++	uint32_t cmd[E1S_ACPM_CMD_WORDS] = { 0, 0, 0, 0 };
++	int error;
++
++	if (value == NULL) {
++		return EINVAL;
++	}
++	cmd[0] = ((uint32_t)type << 8) | reg;
++	cmd[1] = (uint32_t)sid << 24;
++
++	error = e1s_acpm_send(cmd);
++	if (error != 0) {
++		return error;
++	}
++	if (((cmd[1] >> 24) & 0xffU) != 0) {
++		printf("e1s-acpm: read sid=%u type=0x%02x reg=0x%02x failed (%u)\n",
++		    sid, type, reg, (cmd[1] >> 24) & 0xffU);
++		return EIO;
++	}
++	*value = (cmd[1] >> 8) & 0xffU;
++	return 0;
++}
++
++int
++e1s_acpm_mfd_write(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value)
++{
++	uint32_t cmd[E1S_ACPM_CMD_WORDS] = { 0, 0, 0, 0 };
++	int error;
++
++	cmd[0] = ((uint32_t)type << 8) | reg;
++	cmd[1] = E1S_ACPM_MFD_FUNC_WRITE | ((uint32_t)value << 8) |
++	    ((uint32_t)sid << 24);
++
++	error = e1s_acpm_send(cmd);
++	if (error != 0) {
++		return error;
++	}
++	if (((cmd[1] >> 24) & 0xffU) != 0) {
++		printf("e1s-acpm: write sid=%u type=0x%02x reg=0x%02x failed (%u)\n",
++		    sid, type, reg, (cmd[1] >> 24) & 0xffU);
++		return EIO;
++	}
++	return 0;
++}
++
++int
++e1s_acpm_mfd_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
++    uint8_t mask)
++{
++	uint32_t cmd[E1S_ACPM_CMD_WORDS] = { 0, 0, 0, 0 };
++	int error;
++
++	cmd[0] = ((uint32_t)type << 8) | reg;
++	cmd[1] = E1S_ACPM_MFD_FUNC_UPDATE | ((uint32_t)value << 8) |
++	    ((uint32_t)mask << 16) | ((uint32_t)sid << 24);
++
++	error = e1s_acpm_send(cmd);
++	if (error != 0) {
++		return error;
++	}
++	if (((cmd[1] >> 24) & 0xffU) != 0) {
++		printf("e1s-acpm: update sid=%u type=0x%02x reg=0x%02x failed (%u)\n",
++		    sid, type, reg, (cmd[1] >> 24) & 0xffU);
++		return EIO;
++	}
++	return 0;
++}
+diff --git a/bsd/dev/e1s_input.c b/bsd/dev/e1s_input.c
+index 8a79d13..7b44c88 100644
+--- a/bsd/dev/e1s_input.c
++++ b/bsd/dev/e1s_input.c
+@@ -13,6 +13,7 @@
+ #include <kern/thread.h>
+ #include <arm/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include <sys/e1s_pmic.h>
+ #include <sys/redwood_input.h>
+ #include <sys/systm.h>
+ 
+@@ -32,6 +33,8 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+ {
+ 	vm_offset_t base;
+ 	uint32_t stable, last, count = 0;
++	uint32_t pwr_stable = 0, pwr_last = 0, pwr_count = 0, pwr_div = 0;
++	bool pwr_available;
+ 	thread_t thread;
+ 
+ 	base = ml_io_map(E1S_ALIVE_GPIO_BASE, 0x1000);
+@@ -46,6 +49,7 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+ 	 */
+ 	stable = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
+ 	last = 1U;
++	pwr_available = e1s_pmic_ready();
+ 
+ 	for (;;) {
+ 		uint32_t raw = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
+@@ -63,6 +67,33 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+ 			    REDWOOD_BUTTON_VOLUME_UP, 0, 0);
+ 			last = stable;
+ 		}
++
++		/*
++		 * The power key is an input of the S2MPS27, not an SoC GPIO.
++		 * Its real-time status bit is high while the key is held.  Only
++		 * poll it when the ACPM/PMIC probe succeeded.
++		 */
++		if (pwr_available && ++pwr_div >= 10) {
++			uint32_t pwr_raw;
++
++			pwr_div = 0;
++			pwr_raw = e1s_pmic_power_key() ? 1U : 0U;
++
++			if (pwr_raw == pwr_stable) {
++				if (pwr_count < E1S_KEY_DEBOUNCE) {
++					pwr_count++;
++				}
++			} else {
++				pwr_stable = pwr_raw;
++				pwr_count = 1;
++			}
++			if (pwr_count >= E1S_KEY_DEBOUNCE && pwr_stable != pwr_last) {
++				redwood_touch_post(pwr_stable ? REDWOOD_BUTTON_DOWN : REDWOOD_BUTTON_UP,
++				    REDWOOD_BUTTON_LOCK, 0, 0);
++				pwr_last = pwr_stable;
++			}
++		}
++
+ 		delay_for_interval(E1S_KEY_POLL_MS, NSEC_PER_MSEC);
+ 	}
+ }
+@@ -79,10 +110,11 @@ e1s_input_init(void)
+ 	}
+ 
+ 	if (kernel_thread_start(e1s_keys_thread, NULL, &thread) == KERN_SUCCESS) {
+-		printf("e1s-keys: watching volume-up at 0x12850064 bit 0\n");
++		printf("e1s-keys: watching volume-up at 0x12850064 bit 0 and "
++		    "the PMIC power key (%s)\n", e1s_pmic_ready() ? "ready" : "no ACPM");
+ 		thread_deallocate(thread);
+ 	} else {
+-		printf("e1s-keys: no thread for the volume-up key\n");
++		printf("e1s-keys: no thread for the keys\n");
+ 	}
+ }
+ 
+diff --git a/bsd/dev/e1s_pmic.c b/bsd/dev/e1s_pmic.c
+new file mode 100644
+index 0000000..7b0a9c6
+--- /dev/null
++++ b/bsd/dev/e1s_pmic.c
+@@ -0,0 +1,299 @@
++/*
++ * e1s PMIC control (Samsung Galaxy S24, SM-S921B).
++ *
++ * Reads and writes go through the ACPM mailbox driver in e1s_acpm.c.  The
++ * registers named here are from Samsung's s2mps27/s2mps28 drivers, and the
++ * board wiring is from the e1s device tree:
++ *
++ *   LDO9   touch AVDD   3.0 V
++ *   LDO18  touch I/O    1.8 V
++ *   LDO10  panel VCI    3.0 V
++ *   LDO17  panel VDD3   1.8 V
++ *   LDO8   UFS VCC
++ *   S2MPS28_4 LDO5 UFS VCCQ
++ *
++ * S-Boot normally leaves the UFS and panel rails on because it needs them.
++ * Touch is the interesting case: the first XNU image depends on S-Boot having
++ * left LDO9/LDO18 enabled.  `e1spmic=2` enables them explicitly, but that is
++ * opt-in because it is the first write this port makes to a PMIC.
++ *
++ * Boot arguments:
++ *   e1spmic=0  do not touch ACPM or the PMIC at all
++ *   e1spmic=1  probe ACPM and read the PMIC registers (default)
++ *   e1spmic=2  enable the touch rails LDO9/LDO18
++ *   e1spmic=3  enable the touch rails and the panel rails LDO10/LDO17
++ *   e1spmic=4  report (but do not change) the UFS rails
++ */
++#include <kern/clock.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/errno.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++#include <sys/e1s_pmic.h>
++
++#define E1S_PMIC_ENABLE_DELAY_US    2000U
++
++static bool e1s_pmic_up;
++
++bool
++e1s_pmic_ready(void)
++{
++	return e1s_pmic_up;
++}
++
++int
++e1s_pmic_read(uint8_t sid, uint8_t type, uint8_t reg, uint8_t *value)
++{
++	if (!e1s_pmic_up) {
++		return ENXIO;
++	}
++	return e1s_acpm_mfd_read(sid, type, reg, value);
++}
++
++int
++e1s_pmic_write(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value)
++{
++	if (!e1s_pmic_up) {
++		return ENXIO;
++	}
++	return e1s_acpm_mfd_write(sid, type, reg, value);
++}
++
++int
++e1s_pmic_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
++    uint8_t mask)
++{
++	if (!e1s_pmic_up) {
++		return ENXIO;
++	}
++	return e1s_acpm_mfd_update(sid, type, reg, value, mask);
++}
++
++int
++e1s_pmic_enable_ldo(uint8_t sid, uint8_t type, uint8_t ctrl, uint8_t sel,
++    const char *name)
++{
++	uint8_t old, value, now;
++	int error;
++
++	error = e1s_pmic_read(sid, type, ctrl, &old);
++	if (error != 0) {
++		printf("e1s-pmic: %s: cannot read 0x%02x (%d)\n", name, ctrl, error);
++		return error;
++	}
++	if ((old & E1S_PMIC_LDO_ENABLE_MASK) == E1S_PMIC_LDO_ENABLE) {
++		printf("e1s-pmic: %s already on (0x%02x=0x%02x)\n", name, ctrl, old);
++		return 0;
++	}
++
++	/*
++	 * The rails this driver enables are dedicated to the touch or the
++	 * panel, so use the board's selector instead of a voltage the
++	 * firmware may have left from an earlier use.
++	 */
++	value = (sel & E1S_PMIC_LDO_VSEL_MASK) | E1S_PMIC_LDO_ENABLE;
++
++	error = e1s_pmic_write(sid, type, ctrl, value);
++	if (error != 0) {
++		printf("e1s-pmic: %s: write 0x%02x failed (%d)\n", name, ctrl, error);
++		return error;
++	}
++	delay_for_interval(E1S_PMIC_ENABLE_DELAY_US, NSEC_PER_USEC);
++
++	error = e1s_pmic_read(sid, type, ctrl, &now);
++	if (error != 0) {
++		printf("e1s-pmic: %s: enabled, read-back failed (%d)\n", name, error);
++		return 0;
++	}
++	printf("e1s-pmic: %s enabled (0x%02x 0x%02x -> 0x%02x -> 0x%02x)\n",
++	    name, ctrl, old, value, now);
++	return 0;
++}
++
++int
++e1s_pmic_enable_touch_rails(void)
++{
++	int error;
++
++	error = e1s_pmic_enable_ldo(E1S_PMIC_S2MPS27_SID,
++	    E1S_PMIC_S2MPS27_TYPE, E1S_PMIC_S2MPS27_LDO18_CTRL,
++	    E1S_PMIC_TOUCH_IO_SEL, "touch I/O LDO18");
++	if (error != 0) {
++		return error;
++	}
++	return e1s_pmic_enable_ldo(E1S_PMIC_S2MPS27_SID,
++	    E1S_PMIC_S2MPS27_TYPE, E1S_PMIC_S2MPS27_LDO9_CTRL,
++	    E1S_PMIC_TOUCH_AVDD_SEL, "touch AVDD LDO9");
++}
++
++int
++e1s_pmic_enable_panel_rails(void)
++{
++	int error;
++
++	error = e1s_pmic_enable_ldo(E1S_PMIC_S2MPS27_SID,
++	    E1S_PMIC_S2MPS27_TYPE, E1S_PMIC_S2MPS27_LDO17_CTRL,
++	    E1S_PMIC_PANEL_VDD3_SEL, "panel VDD3 LDO17");
++	if (error != 0) {
++		return error;
++	}
++	return e1s_pmic_enable_ldo(E1S_PMIC_S2MPS27_SID,
++	    E1S_PMIC_S2MPS27_TYPE, E1S_PMIC_S2MPS27_LDO10_CTRL,
++	    E1S_PMIC_PANEL_VCI_SEL, "panel VCI LDO10");
++}
++
++int
++e1s_pmic_report_ufs_rails(void)
++{
++	uint8_t l8, l5_ctrl, l5_out;
++	int error;
++
++	error = e1s_pmic_read(E1S_PMIC_S2MPS27_SID, E1S_PMIC_S2MPS27_TYPE,
++	    E1S_PMIC_S2MPS27_LDO8_CTRL, &l8);
++	if (error != 0) {
++		printf("e1s-pmic: UFS LDO8 read failed (%d)\n", error);
++		return error;
++	}
++	error = e1s_pmic_read(E1S_PMIC_S2MPS28_4_SID, E1S_PMIC_S2MPS28_4_TYPE,
++	    E1S_PMIC_S2MPS28_4_LDO5_CTRL, &l5_ctrl);
++	if (error == 0) {
++		error = e1s_pmic_read(E1S_PMIC_S2MPS28_4_SID,
++		    E1S_PMIC_S2MPS28_4_TYPE, E1S_PMIC_S2MPS28_4_LDO5_OUT1,
++		    &l5_out);
++	}
++	if (error != 0) {
++		printf("e1s-pmic: UFS S4-L5 read failed (%d)\n", error);
++		return error;
++	}
++	printf("e1s-pmic: UFS rails LDO8=0x%02x (on=%u) S4-L5=0x%02x/0x%02x "
++	    "(on=%u)\n", l8, (l8 & E1S_PMIC_LDO_ENABLE_MASK) ==
++	    E1S_PMIC_LDO_ENABLE, l5_ctrl, l5_out,
++	    (l5_ctrl & E1S_PMIC_LDO_ENABLE_MASK) != 0);
++	return 0;
++}
++
++bool
++e1s_pmic_power_key(void)
++{
++	uint8_t status = 0;
++
++	if (!e1s_pmic_up) {
++		return false;
++	}
++	if (e1s_pmic_read(E1S_PMIC_S2MPS27_SID, E1S_PMIC_S2MPS27_TYPE,
++	    E1S_PMIC_S2MPS27_PM1_STATUS1, &status) != 0) {
++		return false;
++	}
++	return (status & E1S_PMIC_S2MPS27_STATUS1_PWRON) != 0;
++}
++
++int
++e1s_pmic_rtc_read(struct e1s_pmic_rtc *rtc)
++{
++	uint8_t regs[7];
++	unsigned i;
++	int error;
++
++	if (rtc == NULL) {
++		return EINVAL;
++	}
++	for (i = 0; i < sizeof(regs); i++) {
++		error = e1s_pmic_read(E1S_PMIC_S2MPS27_SID,
++		    E1S_PMIC_S2MPS27_RTC, 0x04 + i, &regs[i]);
++		if (error != 0) {
++			return error;
++		}
++	}
++
++	rtc->second = regs[0];
++	rtc->minute = regs[1];
++	rtc->hour = regs[2];
++	rtc->week = regs[3];
++	rtc->day = regs[4];
++	rtc->month = regs[5];
++	rtc->year = regs[6];
++	return 0;
++}
++
++static void
++e1s_pmic_print_rtc(void)
++{
++	struct e1s_pmic_rtc rtc;
++	int error;
++
++	error = e1s_pmic_rtc_read(&rtc);
++	if (error != 0) {
++		printf("e1s-pmic: RTC read failed (%d)\n", error);
++		return;
++	}
++	printf("e1s-pmic: RTC 20%02x-%02x-%02x %02x:%02x:%02x (BCD, week %u)\n",
++	    rtc.year, rtc.month, rtc.day, rtc.hour, rtc.minute, rtc.second,
++	    rtc.week);
++}
++
++void
++e1s_pmic_init(void)
++{
++	uint8_t chip27 = 0, chip28 = 0, status1 = 0, status2 = 0;
++	uint32_t mode = 1;
++	int error;
++
++	if (PE_parse_boot_argn("e1spmic", &mode, sizeof(mode))) {
++		if (mode == 0) {
++			printf("e1s-pmic: disabled (e1spmic=0)\n");
++			return;
++		}
++	}
++	e1s_acpm_probe();
++	if (!e1s_acpm_ready()) {
++		printf("e1s-pmic: ACPM is not available; PMIC stays untouched\n");
++		return;
++	}
++	e1s_pmic_up = true;
++
++	error = e1s_pmic_read(E1S_PMIC_S2MPS27_SID, E1S_PMIC_S2MPS27_COM,
++	    E1S_PMIC_S2MPS27_COM_CHIP_ID, &chip27);
++	if (error != 0) {
++		printf("e1s-pmic: S2MPS27 chip ID read failed (%d); the PMIC "
++		    "did not answer, so no further reads\n", error);
++		e1s_pmic_up = false;
++		return;
++	}
++	printf("e1s-pmic: S2MPS27 chip ID 0x%02x\n", chip27);
++
++	error = e1s_pmic_read(E1S_PMIC_S2MPS28_4_SID, E1S_PMIC_S2MPS28_4_COM,
++	    E1S_PMIC_S2MPS28_4_COM_CHIP_ID, &chip28);
++	if (error != 0) {
++		printf("e1s-pmic: S2MPS28-4 chip ID read failed (%d)\n", error);
++	} else {
++		printf("e1s-pmic: S2MPS28-4 chip ID 0x%02x\n", chip28);
++	}
++
++	if (e1s_pmic_read(E1S_PMIC_S2MPS27_SID, E1S_PMIC_S2MPS27_TYPE,
++	    E1S_PMIC_S2MPS27_PM1_STATUS1, &status1) == 0 &&
++	    e1s_pmic_read(E1S_PMIC_S2MPS27_SID, E1S_PMIC_S2MPS27_TYPE,
++	    E1S_PMIC_S2MPS27_PM1_STATUS2, &status2) == 0) {
++		printf("e1s-pmic: status1=0x%02x status2=0x%02x power=%u\n",
++		    status1, status2,
++		    (status1 & E1S_PMIC_S2MPS27_STATUS1_PWRON) != 0);
++	}
++
++	if (mode == 2 || mode == 3) {
++		if (e1s_pmic_enable_touch_rails() == 0) {
++			printf("e1s-pmic: touch rails are on\n");
++		}
++	}
++	if (mode == 3) {
++		if (e1s_pmic_enable_panel_rails() == 0) {
++			printf("e1s-pmic: panel rails are on\n");
++		}
++	}
++	if (mode == 4) {
++		(void)e1s_pmic_report_ufs_rails();
++	}
++
++	e1s_pmic_print_rtc();
++	printf("e1s-pmic: ready (mode %u; writes %s)\n", mode,
++	    (mode == 2 || mode == 3) ? "enabled" : "disabled");
++}
+diff --git a/bsd/dev/redwood_audio.c b/bsd/dev/redwood_audio.c
+index 70b6e71..77d8642 100755
+--- a/bsd/dev/redwood_audio.c
++++ b/bsd/dev/redwood_audio.c
+@@ -346,9 +346,18 @@ redwood_audio_init(void)
+ 	}
+ 	report_call = thread_call_allocate(audio_report, NULL);
+ 	audio_recording_init();
++#if defined(E1S)
++	/*
++	 * The sink, speakers, haptic, torch and camera below are all Qualcomm
++	 * redwood hardware.  e1s has none of it; the audio queue and recording
++	 * above are generic and remain available for a future e1s sink.
++	 */
++	printf("redwood-audio: e1s platform; Qualcomm sinks and camera are disabled\n");
++#else
+ 	redwood_virtio_sound_init();
+ 	redwood_speaker_init();
+ 	redwood_haptic_init();
+ 	redwood_torch_init();
+ 	redwood_camera_init();
++#endif
+ }
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index d26f4e9..71bd6cc 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -96,6 +96,7 @@
+ #include <sys/kasl.h>
+ 
+ #if defined(E1S)
++extern void e1s_pmic_init(void);
+ extern void e1s_ufs_probe(void);
+ extern void e1s_camera_probe(void);
+ #endif
+@@ -988,6 +989,9 @@ bsd_init(void)
+ 
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
++#if defined(E1S)
++		e1s_pmic_init();                /* ACPM/PMIC probe; power-key source */
++#endif
+ 		redwood_input_init();           /* /dev/redwood-touch */
+ #if defined(E1S)
+ 		e1s_ufs_probe();                /* read-only UFS register summary */
+diff --git a/bsd/sys/e1s_pmic.h b/bsd/sys/e1s_pmic.h
+new file mode 100644
+index 0000000..34826ea
+--- /dev/null
++++ b/bsd/sys/e1s_pmic.h
+@@ -0,0 +1,87 @@
++/*
++ * e1s PMIC and ACPM interfaces (Samsung Galaxy S24, SM-S921B).
++ *
++ * The PMIC itself is behind the APM firmware; callers use the SID/type/register
++ * addressing of Samsung's SPMI PMIC drivers.  Reads are always allowed.  Writes
++ * go through e1s_pmic_init()'s boot-argument gate.
++ */
++#ifndef _SYS_E1S_PMIC_H_
++#define _SYS_E1S_PMIC_H_
++
++#include <stdint.h>
++#include <stdbool.h>
++
++/* S2MPS27: main PMIC, RTC and GPADC (board node s2mps27mfd@1d). */
++#define E1S_PMIC_S2MPS27_SID        0x0DU
++#define E1S_PMIC_S2MPS27_TYPE       0x1DU
++#define E1S_PMIC_S2MPS27_COM        0x03U
++#define E1S_PMIC_S2MPS27_RTC        0x04U
++#define E1S_PMIC_S2MPS27_PM1        0x05U
++#define E1S_PMIC_S2MPS27_ADC        0x0AU
++
++/* S2MPS28 sub-PMIC 4 (board node s2mps28_4_mfd@5f). */
++#define E1S_PMIC_S2MPS28_4_SID      0x0BU
++#define E1S_PMIC_S2MPS28_4_TYPE     0x5FU
++
++/* S2MPS27 register map (drivers/regulator/samsung/pmic/s2mps27*.h). */
++#define E1S_PMIC_S2MPS27_COM_CHIP_ID    0x0EU
++#define E1S_PMIC_S2MPS27_PM1_STATUS1    0x0AU
++#define E1S_PMIC_S2MPS27_PM1_STATUS2    0x0BU
++#define E1S_PMIC_S2MPS27_PM1_PWRONSRC1  0x0CU
++#define E1S_PMIC_S2MPS27_LDO8_CTRL      0x33U
++#define E1S_PMIC_S2MPS27_LDO9_CTRL      0x34U
++#define E1S_PMIC_S2MPS27_LDO10_CTRL     0x35U
++#define E1S_PMIC_S2MPS27_LDO17_CTRL     0x3CU
++#define E1S_PMIC_S2MPS27_LDO18_CTRL     0x3DU
++#define E1S_PMIC_S2MPS27_STATUS1_PWRON  (1U << 0)
++
++/* S2MPS28 sub-4 LDO5 controls the UFS VCCQ rail: CTRL enables, OUT1 selects. */
++#define E1S_PMIC_S2MPS28_4_LDO5_CTRL    0x86U
++#define E1S_PMIC_S2MPS28_4_LDO5_OUT1    0x87U
++#define E1S_PMIC_S2MPS28_4_COM_CHIP_ID  0x0EU
++#define E1S_PMIC_S2MPS28_4_COM          0x03U
++
++#define E1S_PMIC_LDO_VSEL_MASK          0x3FU
++#define E1S_PMIC_LDO_ENABLE_MASK        0xC0U
++#define E1S_PMIC_LDO_ENABLE             0xC0U
++
++/* S2MPS27 LDO9 (touch AVDD) and LDO18 (touch I/O). */
++#define E1S_PMIC_TOUCH_AVDD_SEL         0x30U   /* 1.8 V + 25 mV * 48 = 3.0 V */
++#define E1S_PMIC_TOUCH_IO_SEL           0x18U   /* 1.5 V + 12.5 mV * 24 = 1.8 V */
++/* Panel VCI (LDO10, 3.0 V) and VDD3 (LDO17, 1.8 V). */
++#define E1S_PMIC_PANEL_VCI_SEL          0x30U
++#define E1S_PMIC_PANEL_VDD3_SEL         0x18U
++
++struct e1s_pmic_rtc {
++	uint8_t year;   /* 00..99, BCD */
++	uint8_t month;  /* 01..12, BCD */
++	uint8_t day;    /* 01..31, BCD */
++	uint8_t week;   /* 0..6 */
++	uint8_t hour;   /* 00..23, BCD */
++	uint8_t minute; /* 00..59, BCD */
++	uint8_t second; /* 00..59, BCD */
++};
++
++/* All of these return 0 on success or an errno. */
++bool e1s_acpm_ready(void);
++void e1s_acpm_probe(void);
++int e1s_acpm_mfd_read(uint8_t sid, uint8_t type, uint8_t reg, uint8_t *value);
++int e1s_acpm_mfd_write(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value);
++int e1s_acpm_mfd_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
++    uint8_t mask);
++
++bool e1s_pmic_ready(void);
++void e1s_pmic_init(void);
++int e1s_pmic_read(uint8_t sid, uint8_t type, uint8_t reg, uint8_t *value);
++int e1s_pmic_write(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value);
++int e1s_pmic_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
++    uint8_t mask);
++bool e1s_pmic_power_key(void);
++int e1s_pmic_rtc_read(struct e1s_pmic_rtc *rtc);
++int e1s_pmic_enable_ldo(uint8_t sid, uint8_t type, uint8_t ctrl, uint8_t sel,
++    const char *name);
++int e1s_pmic_enable_touch_rails(void);
++int e1s_pmic_enable_panel_rails(void);
++int e1s_pmic_report_ufs_rails(void);
++
++#endif /* _SYS_E1S_PMIC_H_ */

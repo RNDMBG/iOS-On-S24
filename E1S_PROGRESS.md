@@ -557,3 +557,61 @@ base and the historical SWEET series:
 All path references, CI filters, host checks, and documentation were updated.
 The series still applies cleanly on a fresh `xnu-8796.121.2` tree. No kernel
 was rebuilt or flashed for this move.
+
+## 2026-10-26 - ACPM/PMIC, power key, and battery monitor
+
+Two more e1s patches were added and built on top of the relocated series.
+
+`0007-e1s-pmic.patch`:
+
+- `bsd/dev/e1s_acpm.c` reuses the S-Boot APM firmware through the AP2APM
+  mailbox at `0x12B90000`. The channel table is read from APM SRAM at
+  `0x02055000 + 0x9D00`; it is not rebuilt. PMIC traffic uses channel 2.
+- `bsd/dev/e1s_pmic.c` reads the S2MPS27 (`0x0d`/`0x1d`) and S2MPS28 sub-4
+  (`0x0b`/`0x5f`) chip IDs, the S2MPS27 status, and the S2MPS27 RTC.
+- `e1spmic=1` is the default and only reads. `e1spmic=2` enables the touch
+  rails LDO9/LDO18; `e1spmic=3` enables touch and the panel rails LDO10/LDO17;
+  `e1spmic=4` reports the UFS rails without changing them.
+- The S2MPS27 power key (status bit `PWRON`) is debounced and posted as
+  `REDWOOD_BUTTON_LOCK` next to the volume-up GPIO key.
+- `redwood_audio_init()` gates the Qualcomm sound, haptic, torch, and camera
+  sinks on e1s. The generic audio queue and recording path stay.
+
+`0008-e1s-battery.patch`:
+
+- `bsd/dev/e1s_battery.c` bit-bangs `hsi2c_16` on `gpp8-0`/`gpp8-1` and reads
+  the MAX77775 fuel gauge at `0x36` (charger at `0x69`).
+- It reads `STATUS`, `REPSOC`, `VCELL`, `CURRENT`, `TEMP`, `REPCAP`,
+  `FULLCAP`, `CYCLES`, and `DESIGNCAP`, converts them with Samsung's integer
+  formulas, and calls `redwood_battery_report()`.
+- `fuelgauge,fg_resistor = <5>` is Samsung's code for the e1s 2 mOhm sense
+  resistor, so one current LSB is 781.25 uA and one capacity LSB is 2.5 mAh.
+- The driver only reads. It does not change charging limits, the charger, or
+  the gauge configuration. `e1sbattery=0` disables it.
+
+Build result: `mach.development.e1s` links at 16,227,784 bytes. The build still
+stops only in the known `check_all_exports` pass. The full series applies on a
+fresh `xnu-8796.121.2` tree, and the new host checks
+`tools/e1s/test_e1s_pmic.py` and `tools/e1s/test_e1s_battery.py` pass.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,227,784 | `c43bb43bfcf73ccb2eb1ff286f9ab3aba407768d5b83ce740731933c05f29c36` |
+| `out/e1s-boot-touch.img` | 16,355,344 | `9b766da556ec34af5c56cf957b2ad80ac53500c2dd51a2af22b1502b1ed5b9d7` |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 | `fa99c268d6f2a50146d64bceacc0843a09ba6b9f44ad0732cf0b7d87533a4b2e` |
+
+The payload is at `0x19000`, the entry is `0xfffffff0074224a8`, there are 10
+segments, the ADT is 16,644 bytes, and the fallback RAM window is
+`0xA0000000+0x20000000`. The command line remains
+`debug=0x14e cpus=1 keepsyms=1 -v`; it has no `e1spmic`, `e1sbattery`,
+`e1scam` or `rd=ufsroot0`, so PMIC and battery run read-only and the camera
+and UFS root paths stay inert.
+
+Not device-tested: the mailbox handshake, channel table layout, PMIC reads,
+rail writes, RTC, power key, and every fuel-gauge transfer. The APM channel
+descriptor layout is compiled from Samsung's `struct ipc_channel` and
+`struct channel_info`; if the firmware revision differs, `e1s-acpm` prints the
+channel dump and falls back without touching the PMIC. No new image has been
+flashed.
