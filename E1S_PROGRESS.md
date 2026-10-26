@@ -687,13 +687,46 @@ Regenerated (not flashed):
 | File | Size | SHA-256 |
 | --- | ---: | --- |
 | `mach.development.e1s` | 16,227,856 | `0e3a574dfbf52d924e0ab3ba5c8fd5e3c51ab0d5e7ef3b8e97dbc730f4012250` |
-| `out/e1s-boot-touch.img` | 16,355,344 | `4b46741fc808f987cdf4f1d6a8a85380e163e1a4322cea28543a174dfa822c8c` |
-| `out/e1s-boot-touch.img.tar` | 16,363,520 | `00eedd1399236c079216b695c913d82a0dfa459b80f37c5332f5334713c9278d` |
+| `out/e1s-boot-touch.img` | 16,359,440 | `a05673af6324ae70884fc7b5ec5fc3f31bcfd20bfad2e64f725bdb38abd39b1c` |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 | `4325a14db2e6a35d63b0d138743ab6a5a726c81bfdefd1f695d38a1e8b2e0ee2` |
 
-The payload layout is unchanged: payload at `0x19000`, entry
-`0xfffffff0074224a8`, 10 segments, ADT 16,644 bytes, fallback RAM
-`0xA0000000+0x20000000`. The command line still has no `e1sdisp`, so the
-first boot prints the summary and does not read the display controller.
+The kernel payload now starts at `0x1a000` because the loader grew to 106,496
+bytes; the entry remains `0xfffffff0074224a8`, with 10 segments, a 16,644-byte
+ADT and the fallback RAM window `0xA0000000+0x20000000`. The command line still
+has no `e1sdisp`, so the first boot prints the summary and does not read the
+display controller. The loader also gained the multi-CPU ADT scan; the default
+ADT still publishes one CPU, so `cpus=1` keeps the same behavior.
 
 Not device-tested: every DECON/DSIM/RDMA read and the assumption that the DPU
 is still powered at handoff. No new image has been flashed.
+
+## 2026-10-26 - HackiOS port map and the SMP test image
+
+`docs/e1s-hackios-port-map.md` now classifies all 31 `redwood_*` drivers and
+the core HackiOS changes. The short version:
+
+- The generic services stay: `MiniIOSurface`, `MiniIOMobileFramebuffer`,
+  `MiniAppleKeyStore`, `MiniIONetworkStack`, `RedwoodBattery`, the input/audio
+  queues, APFS/mockfs/ramfs/bindfs, and the PSCI/GIC/platform code.
+- The Qualcomm hardware paths are gated at `redwood_input_init()` and
+  `redwood_audio_init()` and are unreachable on e1s. The e1s replacements are
+  the `e1s_*` drivers (`0003`, `0005`-`0010`).
+- Still missing: the DECON rebind if RDMA0 is not on the XNU framebuffer,
+  SMP, panel power/backlight, a touch IRQ, USB, an audio sink, camera capture,
+  CPU DVFS, and the radios. GPU acceleration is not required.
+
+The SMP groundwork is in place but untested:
+
+- `tools/e1s/xnu/mkadt.py --smp` publishes the ten DTS CPUs (`0x000`..`0x900`)
+  in four clusters, with `small-core` on the four little cores.
+- `shim/e1s-xnu/adt_patch.c` now scans the `/cpus` children and leaves an
+  existing boot MPIDR alone; the one-CPU tree still gets the live MPIDR
+  written into its only `reg`.
+- `tools/e1s/test_e1s_smp.py` compiles the loader patch on the host and
+  checks both trees and the duplicate-MPIDR cases.
+- `docs/e1s-smp.md` has the `cpus=10`, `small_cores_after=0` test-image
+  procedure. The default image remains one CPU.
+
+The loader grew to 106,496 bytes, so the default BOOT payload moved to
+`0x1a000`; the image is 16,359,440 bytes and the tar is unchanged at
+16,363,520. Neither has been flashed.

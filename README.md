@@ -157,7 +157,12 @@ builds the real HackiOS base instead of the old SWEET series:
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
   series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
-  battery/RTC/display checks. It does not build the kernel.
+  battery/RTC/display/port-map/SMP checks. It does not build the kernel.
+
+The driver-by-driver disposition of the HackiOS `redwood_*` tree (kept,
+gated, replaced, not applicable, or still missing) is in
+`docs/e1s-hackios-port-map.md`; the optional ten-core test image is described
+in `docs/e1s-smp.md`.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,

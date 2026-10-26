@@ -188,9 +188,71 @@ adt_set_pram(uintptr_t adt, uint64_t size, uint64_t base, uint64_t pram_size)
 	return -1;
 }
 
+static int
+node_u32_prop(uintptr_t adt, uint64_t size, uint32_t node, const char *name,
+    uint32_t *value)
+{
+	uint32_t nprops;
+	if (rd32(adt, size, node, &nprops))
+		return -1;
+	uint32_t off = node + 8;
+	for (uint32_t i = 0; i < nprops; i++) {
+		uint32_t len;
+		if (!in_bounds(size, off, 36) ||
+		    rd32(adt, size, off + 32, &len))
+			return -1;
+		if (prop_name_is(adt, off, name)) {
+			if ((len & 0x7fffffffU) != 4 || (len & 0x80000000U))
+				return -1;
+			*value = *(const volatile uint32_t *)(adt + off + 36);
+			return 0;
+		}
+		len &= 0x7fffffffU;
+		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
+		if (next > size)
+			return -1;
+		off = (uint32_t)next;
+	}
+	return -1;
+}
+
+static int
+set_node_u32_prop(uintptr_t adt, uint64_t size, uint32_t node,
+    const char *name, uint32_t value)
+{
+	uint32_t nprops;
+	if (rd32(adt, size, node, &nprops))
+		return -1;
+	uint32_t off = node + 8;
+	for (uint32_t i = 0; i < nprops; i++) {
+		uint32_t len;
+		if (!in_bounds(size, off, 36) ||
+		    rd32(adt, size, off + 32, &len))
+			return -1;
+		if (prop_name_is(adt, off, name)) {
+			if ((len & 0x7fffffffU) != 4 || (len & 0x80000000U))
+				return -1;
+			*(volatile uint32_t *)(adt + off + 36) = value;
+			return 0;
+		}
+		len &= 0x7fffffffU;
+		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
+		if (next > size)
+			return -1;
+		off = (uint32_t)next;
+	}
+	return -1;
+}
+
+/*
+ * The default ADT has one CPU child, so its "reg" has to become the live boot
+ * MPIDR. An SMP ADT already carries the ten DTS MPIDRs: if the live MPIDR is
+ * one of them, leave the tree alone; otherwise patch the first child, which
+ * is what the one-CPU tree needs.
+ */
 int adt_set_boot_cpu_mpidr(uintptr_t adt, uint64_t size, uint32_t mpidr)
 {
-	uint32_t cpus, cpu, nprops, nchildren;
+	uint32_t cpus, nprops, nchildren, first = 0;
 	if (!adt || size < 8 ||
 	    find_child(adt, size, 0, "cpus", &cpus))
 		return -1;
@@ -201,26 +263,17 @@ int adt_set_boot_cpu_mpidr(uintptr_t adt, uint64_t size, uint32_t mpidr)
 	uint32_t off = cpus + 8;
 	if (skip_props(adt, size, &off, nprops))
 		return -1;
-	cpu = off;
-	if (rd32(adt, size, cpu, &nprops))
-		return -1;
-	off = cpu + 8;
-	for (uint32_t i = 0; i < nprops; i++) {
-		uint32_t len;
-		if (!in_bounds(size, off, 36) ||
-		    rd32(adt, size, off + 32, &len))
-			return -1;
-		if (prop_name_is(adt, off, "reg")) {
-			if ((len & 0x7fffffffU) != 4 || (len & 0x80000000U))
-				return -1;
-			*(volatile uint32_t *)(adt + off + 36) = mpidr;
+	for (uint32_t i = 0; i < nchildren; i++) {
+		uint32_t child = off, reg;
+		if (node_u32_prop(adt, size, child, "reg", &reg) == 0 &&
+		    reg == mpidr)
 			return 0;
-		}
-		len &= 0x7fffffffU;
-		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
-		if (next > size)
+		if (!first)
+			first = child;
+		if (node_end(adt, size, child, &off, 0))
 			return -1;
-		off = (uint32_t)next;
 	}
-	return -1;
+	if (!first)
+		return -1;
+	return set_node_u32_prop(adt, size, first, "reg", mpidr);
 }

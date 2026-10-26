@@ -123,8 +123,8 @@ This build produced:
 
 | File | Size |
 | --- | ---: |
-| `shim/e1s-xnu/out/Image` | 102,400 bytes |
-| `out/e1s-boot-touch.img` | 16,355,344 bytes |
+| `shim/e1s-xnu/out/Image` | 106,496 bytes |
+| `out/e1s-boot-touch.img` | 16,359,440 bytes |
 | `out/e1s-boot-touch.img.tar` | 16,363,520 bytes |
 
 This build's SHA-256 values:
@@ -132,17 +132,19 @@ This build's SHA-256 values:
 - `mach.development.e1s`:
   `0e3a574dfbf52d924e0ab3ba5c8fd5e3c51ab0d5e7ef3b8e97dbc730f4012250`
 - `e1s-boot-touch.img`:
-  `4b46741fc808f987cdf4f1d6a8a85380e163e1a4322cea28543a174dfa822c8c`
+  `a05673af6324ae70884fc7b5ec5fc3f31bcfd20bfad2e64f725bdb38abd39b1c`
 - `e1s-boot-touch.img.tar`:
-  `00eedd1399236c079216b695c913d82a0dfa459b80f37c5332f5334713c9278d`
+  `4325a14db2e6a35d63b0d138743ab6a5a726c81bfdefd1f695d38a1e8b2e0ee2`
 
-The kernel payload at `0x19000` now includes `0007` (ACPM/PMIC), `0008`
+The kernel payload at `0x1a000` now includes `0007` (ACPM/PMIC), `0008`
 (MAX77775 battery), `0009` (RTC calendar) and `0010` (display state). The
 command line has no `e1spmic`, `e1sbattery`, `e1srtc`, `e1sdisp`, `e1scam` or
 `rd=ufsroot0` argument, so the image uses the defaults: PMIC reads only
 (mode 1), battery reads only, RTC sets the calendar, the display report prints
 the framebuffer summary, no camera probe, no UFS root. Add `e1sdisp=2` only
-for a diagnostic boot that may read the DECON/DSIM block.
+for a diagnostic boot that may read the DECON/DSIM block. The loader now scans
+all `/cpus` children, but the default ADT still has one CPU; the ten-core test
+image is `docs/e1s-smp.md`.
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with

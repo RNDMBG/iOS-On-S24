@@ -43,6 +43,8 @@ jobs:
           python3 tools/e1s/test_e1s_battery.py
           python3 tools/e1s/test_e1s_rtc.py
           python3 tools/e1s/test_e1s_display.py
+          python3 tools/e1s/test_e1s_port_map.py
+          python3 tools/e1s/test_e1s_smp.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |

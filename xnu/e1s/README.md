@@ -177,6 +177,16 @@ handoff.
 The panel reset is `gpc7-0`, active low (`PERIC2 0x11830000`, bank `0x1a0`).
 Nothing drives it yet; it is recorded for the eventual panel power sequence.
 
+### SMP (optional)
+
+The default ADT still publishes one CPU and the image boots with `cpus=1`.
+HackiOS's PSCI SMP code and the e1s board limits are already in place;
+`tools/e1s/xnu/mkadt.py --smp` publishes the ten DTS CPUs (MPIDR
+`0x000`..`0x900`, four clusters, `small-core` on the little cores), and
+`shim/e1s-xnu/adt_patch.c` keeps the boot CPU's `reg` from being duplicated.
+`docs/e1s-smp.md` has the `cpus=10` test-image procedure. None of it has run
+on the phone.
+
 ## Build
 
 ```sh

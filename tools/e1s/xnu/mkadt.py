@@ -117,8 +117,12 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
-    """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
+def build(seed=None, qemu=False, highmem=False, smp=False):
+    """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py).
+
+    smp=True publishes all ten e1s CPUs with the DTS MPIDR map. The default is
+    still one CPU: the SMP path needs a BOOT command line with cpus=10.
+    """
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
@@ -185,32 +189,49 @@ def build(seed=None, qemu=False, highmem=False):
         # with CSR_ALLOW_UNRESTRICTED_FS (vm_unix.c shared region checks).
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
-    # Experimental: only the boot CPU. The S24 MPIDR map and cluster layout
-    # have not been measured, so advertising ten cores would be a guess.
+    # The DTS map is cpu@0..cpu@900: four clusters of 4 + 3 + 2 + 1 cores, with
+    # cpu0..3 in the little (Cortex-A520) cluster. Only the boot CPU is
+    # published by default. --smp publishes all ten; the loader keeps the
+    # boot CPU's "reg" matching the live MPIDR either way.
+    if smp:
+        cpu_table = [
+            (0x000, 0, 0, True), (0x100, 0, 1, True),
+            (0x200, 0, 2, True), (0x300, 0, 3, True),
+            (0x400, 1, 0, False), (0x500, 1, 1, False),
+            (0x600, 1, 2, False), (0x700, 2, 0, False),
+            (0x800, 2, 1, False), (0x900, 3, 0, False),
+        ]
+    else:
+        cpu_table = [(0x000, 0, 0, False)]
+
     cpu_nodes = []
-    for core in range(1):
-        cpu_nodes.append(node(f'cpu{core}', [
+    for index, (mpidr, cluster, core, small) in enumerate(cpu_table):
+        props = [
             ph(),
             ('device_type', cstr('cpu')),
-            # Keep the SWEET CPU driver's match until e1s CPU topology is known.
             ('compatible', cstr('samsung,exynos2400') + cstr('arm,armv8')),
-            # The loader rewrites this to the live boot MPIDR before XNU starts.
-            ('reg', u32(0)),
-            ('cpu-id', u32(core)),
-            ('cluster-id', u32(0)),
+            # The loader makes this match the live boot MPIDR before XNU starts.
+            ('reg', u32(mpidr)),
+            ('cpu-id', u32(index)),
+            ('cluster-id', u32(cluster)),
             ('cluster-type', u32(0)),
-            ('die-cluster-id', u32(0)),
+            ('die-cluster-id', u32(cluster)),
             ('cluster-core-id', u32(core)),
-            ('l2-cache-id', u32(core)),
+            ('l2-cache-id', u32(cluster)),
             ('l3-cache-id', u32(0)),
             ('state', cstr('running')),
+        ]
+        if small:
+            props.append(('small-core', u32(1)))
+        props.extend([
             ('timebase-frequency', u32(timebase)),
             ('clock-frequency', u32(2400000000)),
             ('bus-frequency', u32(100000000)),
             ('memory-frequency', u32(3200000000)),
             ('peripheral-frequency', u32(timebase)),
             ('fixed-frequency', u32(timebase)),
-        ]))
+        ])
+        cpu_nodes.append(node(f'cpu{index}', props))
     cpus = node('cpus', [ph(), ('#address-cells', u32(1)),
                          ('#size-cells', u32(0))], cpu_nodes)
 
@@ -312,9 +333,13 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    paths = [arg for arg in sys.argv[1:] if not arg.startswith('--')]
+    if not paths:
+        sys.exit('usage: mkadt.py OUTPUT [--qemu] [--highmem] [--smp] [--dump]')
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
+                 smp='--smp' in sys.argv)
     blob = adt.serialize(root)
-    open(sys.argv[1], 'wb').write(blob)
+    open(paths[0], 'wb').write(blob)
     if '--dump' in sys.argv:
         adt.dump(adt.parse(blob)[0])
-    print(f'{sys.argv[1]}: {len(blob)} bytes', file=sys.stderr)
+    print(f'{paths[0]}: {len(blob)} bytes', file=sys.stderr)
