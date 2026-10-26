@@ -1,11 +1,10 @@
 # E1S progress
 
-Chronological record. Keep source-derived facts, build results, and device
-observations separate.
+Chronological record.
 
 ## 2026-10-22 - repository initialized, hardware research
 
-**Status:** no phone test yet. No XNU kernel built. No destructive operation.
+**Status:** no phone test yet. No XNU kernel built.
 
 Source research completed:
 
