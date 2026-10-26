@@ -177,6 +177,15 @@ handoff.
 The panel reset is `gpc7-0`, active low (`PERIC2 0x11830000`, bank `0x1a0`).
 Nothing drives it yet; it is recorded for the eventual panel power sequence.
 
+The loader leaves `boot_args.video.v_baseAddr` physical and even. That is
+deliberate: `PE_create_console()` calls `initialize_screen(&PE_state.video)`
+during `arm_init`, while `kernel_map == VM_MAP_NULL`, so
+`initialize_screen()` maps the buffer and stores the kernel virtual address in
+`vinfo.v_baseaddr`. `MiniIOMobileFramebuffer` reads that mapping and calls
+`PE_initialize_console(NULL, ...)`; it never feeds the raw boot-args address
+back to `initialize_screen()` after `kernel_map` exists. Setting bit 0 would
+only matter for that later call, which does not happen.
+
 ### SMP (optional)
 
 The default ADT still publishes one CPU and the image boots with `cpus=1`.
