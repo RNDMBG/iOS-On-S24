@@ -103,6 +103,12 @@ def main():
     if not (0x91200000 < pa <= 0x91400000 - (1 << 20)):
         errors.append("the XNU ring does not fit the sec_debug_next reservation")
 
+    # Synthetic ring: initialized but no console output yet.
+    blob, text = make_ring(0)
+    got = read_log.extract_xnu(blob)
+    if got is None or got[1] != b"":
+        errors.append("empty ring did not parse")
+
     # Synthetic ring: not wrapped.  The stream is 0..9 at ring indices 0..9.
     blob, text = make_ring(10)
     got = read_log.extract_xnu(blob)

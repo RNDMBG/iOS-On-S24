@@ -96,7 +96,12 @@ def main():
             sys.stdout.write("\n")
 
     if args.output:
-        text = xnu[1] if xnu is not None else records[-1][2]
+        if xnu is not None and xnu[1]:
+            text = xnu[1]
+        elif records:
+            text = records[-1][2]
+        else:
+            text = b""
         with open(args.output, "wb") as f:
             f.write(text)
         print(f"wrote {args.output}: {len(text)} bytes")

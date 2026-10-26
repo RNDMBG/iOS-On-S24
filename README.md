@@ -139,8 +139,8 @@ builds the real HackiOS base instead of the old SWEET series:
   and with `e1sdisp=2` reads (never writes) DECON0..3, the DECON0 windows,
   RDMA0..3, DSIM0/1 and the DCPHY0 PLL. The dump is opt-in because a read
   from a gated DPU block can hang the interconnect.
-- `xnu/e1s/patches/0011-e1s-log.patch`: mirrors every XNU console character
-  into a 1 MiB ring at `0x91300000`, inside Samsung's `sec_debug_next`
+- `xnu/e1s/patches/0011-e1s-log.patch`: mirrors XNU console output after
+  `bsd_init` into a 1 MiB ring at `0x91300000`, inside Samsung's `sec_debug_next`
   reservation. The loader's record stays at `0x91200000`; dumping 2 MiB from
   there and running `tools/e1s/read_log.py` recovers the display probe even if
   the screen stays black. `e1slog=0` disables it.
