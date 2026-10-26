@@ -765,11 +765,11 @@ Regenerated (not flashed):
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `mach.development.e1s` | 16,228,056 | `393c2a64e8e074b189707dcc6f14f736ee992257efcf378fbb3a4158233aa607` |
-| `out/e1s-boot-touch.img` | 16,359,440 | `bedbcb22daeaa0e8ddf0630df09256a3914455354434a669d89ec221f9f8efb3` |
-| `out/e1s-boot-touch.img.tar` | 16,363,520 | `b67d90ca4460660fc12586833bf487ac64d84021879772bfdd6c64140457239e` |
-| `out/e1s-boot-smp.img` | 16,367,632 | `57eb8bd2d7ba39c7b31a419b34d32cf48a775f4c64ed1f6a31e30146009f0f24` |
-| `out/e1s-boot-smp.img.tar` | 16,373,760 | `043e0ef15ee5728d5398a0f8e36e0ef1746f0947128e12a8b4948cd3f237865c` |
+| `mach.development.e1s` | 16,244,344 | `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68` |
+| `out/e1s-boot-touch.img` | 16,375,824 | `fc47a9e62bcd76fef8f55d0881ba1ef6c315345c3972a8f5ca6e5d3ffdacbcb9` |
+| `out/e1s-boot-touch.img.tar` | 16,384,000 | `f056285ddacd8dfb41071b64e016b655ab3ccef2885cd7a53e18c3bfb6c0e197` |
+| `out/e1s-boot-smp.img` | 16,384,016 | `a1279030e39db180689ee94509f4b1aed31e30ea7419675815e9747ea256b78e` |
+| `out/e1s-boot-smp.img.tar` | 16,394,240 | `07ad699a203d0d513f8f9e08c814b2444329917d08a0db7184b8bc41382709d4` |
 
 Both images include `0011`. The default command line is still
 `debug=0x14e cpus=1 keepsyms=1 -v`; the ring is on by default, and neither
@@ -778,3 +778,23 @@ image has `e1sdisp=2`.
 Not device-tested: whether `0x91200000` is safe to write at all, whether the
 second MiB is outside every firmware carve-out, and whether the recovery can
 read the full 2 MiB through `/dev/mem`. No new image has been flashed.
+
+## 2026-10-26 - Comment cleanup
+
+The e1s-authored C, Python and shell files, plus the code added by the e1s
+patches, no longer carry the long explanatory comment blocks. The cleanup
+keeps the SPDX/Apple headers, shebangs, preprocessor lines, and short
+register/boot-argument comments.
+
+The patch series was rebuilt from the original states rather than edited in
+place, so a new file is comment-stripped when it is created and later patches
+have matching context. There are no add-then-delete comment hunks. Tests that
+looked for prose in comments were changed to check code or output instead.
+The series still applies on a fresh HackiOS base, the kernel builds, and all
+thirteen host checks pass.
+
+The table above is the rebuilt image set. The kernel is 16,244,344 bytes,
+SHA-256 `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68`.
+The kernel's absolute source path is part of the embedded strings, so the
+image size and hash depend on the build directory; use the verifier's value.
+No image has been flashed.

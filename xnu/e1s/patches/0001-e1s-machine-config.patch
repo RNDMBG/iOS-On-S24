@@ -199,20 +199,10 @@ index 203e1f4..83534da 100644
  	/* Initialize the runtime for the trust cache interface */
 diff --git a/pexpert/pexpert/arm64/E1S.h b/pexpert/pexpert/arm64/E1S.h
 new file mode 100644
-index 0000000..6a94c95
+index 0000000..68d3537
 --- /dev/null
 +++ b/pexpert/pexpert/arm64/E1S.h
-@@ -0,0 +1,45 @@
-+/*
-+ * Board config for the Samsung Galaxy S24 Exynos (SM-S921B, e1s,
-+ * Exynos 2400 / S5E9945): 10 ARMv9 cores, GICv3, 25.6 MHz arch timer.
-+ *
-+ * This starts from the generic BCM2837 configuration: no Apple platform
-+ * registers, no PPL, 4 KiB pages.  The e1s boot chain hands XNU a live
-+ * framebuffer and an Apple-format device tree; there is no PL011 UART, so
-+ * the early console is the framebuffer console.
-+ */
-+
+@@ -0,0 +1,26 @@
 +#ifndef _PEXPERT_ARM_E1S_H
 +#define _PEXPERT_ARM_E1S_H
 +
@@ -226,10 +216,6 @@ index 0000000..6a94c95
 +#define GENERIC_GIC_V3_IRQ 1
 +#define GENERIC_PSCI_SMP 1
 +
-+/*
-+ * Exynos 2400 is ARMv9, but XNU 8796's generic arm64 path only needs the
-+ * ARMv8.2 feature set.  PAN is present, so user accesses must be checked.
-+ */
 +#define __ARM_PAN_AVAILABLE__ 1
 +#define __ARM_ARCH__ 8
 +#define __ARM_VMSA__ 8
@@ -239,11 +225,6 @@ index 0000000..6a94c95
 +#define __ARM64_PMAP_SUBPAGE_L1__ 1
 +
 +#ifndef ASSEMBLER
-+/*
-+ * The e1s framebuffer is supplied by S-Boot in boot_args.video.  No fixed
-+ * PL011/mini-UART is available, so serial_init() must fail and PE_kprintf
-+ * must fall back to the video console.
-+ */
 +#define E1S_VIDEO_CONSOLE 1
 +#endif /* ! ASSEMBLER */
 +

@@ -39,7 +39,6 @@ def main():
     assert "bsd/dev/e1s_touch.c\t\tstandard" in body
     assert "e1s_touch_init" in body
 
-    # The event format and action values come from stm_reg.h.
     assert "STM_COORD_PRESS         1" in text
     assert "STM_COORD_MOVE          2" in text
     assert "STM_COORD_RELEASE       3" in text

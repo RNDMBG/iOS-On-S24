@@ -99,8 +99,6 @@ def main():
         if item not in hw:
             errors.append(f"hardware map missing: {item}")
 
-    # The source treats a pressed key as a zero bit.  Two equal samples are
-    # enough; a glitch must not produce an event.
     cases = [
         ([1] * 10, []),
         ([1, 1, 0, 0, 1, 1], [0, 1]),

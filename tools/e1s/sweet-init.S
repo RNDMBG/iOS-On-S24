@@ -1,15 +1,3 @@
-/*
- * First userspace program for SWEET bring-up: mockfs serves the RAM disk
- * itself as /sbin/launchd, so this static binary is PID 1. It proves that
- * exec, the user/kernel boundary, devfs and the console all work, then
- * stays alive (init exiting panics the kernel).
- *
- * tools/mkinit.py wraps the assembled __text into a static Mach-O, so this
- * must stay position independent with no relocations and no writable data:
- * every reference is adr (PC-relative), the PID digit lives on the stack.
- *
- * Raw XNU syscalls: number in x16, svc #0x80, carry set on error.
- */
 #define SYS_write	4
 #define SYS_open	5
 #define SYS_getpid	20
@@ -20,12 +8,6 @@
 	.globl	_start
 	.p2align 2
 _start:
-	/*
-	 * The kernel enters a static binary with sp at argc, aligned only to
-	 * what the argument/apple strings happened to need. Using a misaligned
-	 * sp as a base register raises an SP alignment fault (SIGBUS) on real
-	 * hardware (QEMU does not check), so align it like crt0/dyld do.
-	 */
 	mov	x9, sp
 	and	x9, x9, #~15
 	mov	sp, x9

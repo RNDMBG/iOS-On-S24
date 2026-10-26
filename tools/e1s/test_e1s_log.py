@@ -90,33 +90,25 @@ def main():
     if "bsd/dev/e1s_log.c" not in files:
         errors.append("bsd/conf/files does not build e1s_log.c")
 
-    # The XNU window must exclude the whole 2 MiB reservation, not just the
-    # loader's first 128 KiB, or XNU can allocate over the ring.
     if "#define LOG_RESERVE\t0x200000UL" not in loader:
         errors.append("loader.c does not reserve the full sec_debug_next range")
     if "occ[nocc++].size = LOG_RESERVE;" not in loader:
         errors.append("choose_window does not use LOG_RESERVE")
 
-    # The ring must fit inside the 2 MiB sec_debug_next reservation and must
-    # not overlap the loader's record in the first MiB.
     pa = int("91300000", 16)
     if not (0x91200000 < pa <= 0x91400000 - (1 << 20)):
         errors.append("the XNU ring does not fit the sec_debug_next reservation")
 
-    # Synthetic ring: initialized but no console output yet.
     blob, text = make_ring(0)
     got = read_log.extract_xnu(blob)
     if got is None or got[1] != b"":
         errors.append("empty ring did not parse")
 
-    # Synthetic ring: not wrapped.  The stream is 0..9 at ring indices 0..9.
     blob, text = make_ring(10)
     got = read_log.extract_xnu(blob)
     if got is None or got[1] != text:
         errors.append(f"unwrapped ring parsed as {got[1] if got else None}")
 
-    # Synthetic ring: wrapped (total 40, ring 32).  The ring keeps the last
-    # 32 bytes, 8..39; the reader must return those in order.
     blob, text = make_ring(40)
     if text != bytes(range(8, 40)):
         errors.append("the synthetic wrapped ring is wrong")
@@ -126,9 +118,6 @@ def main():
     if got is not None and got[2] != 3:
         errors.append("the ring sequence was not parsed")
 
-    # Full sec_debug_next layout: the loader record at 0x91200000 and a 1 MiB
-    # ring at 0x91300000.  The dump is exactly 2 MiB, so this also checks the
-    # end-of-reservation arithmetic in the parser.
     ring_blob, text = make_ring(40, data_off=0x100, size=(1 << 20) - 0x100)
     dump = bytearray(2 << 20)
     dump[0:8] = b"E1SXNU01"

@@ -99,7 +99,6 @@ def main():
         if item not in battery:
             errors.append(f"e1s_battery.c missing: {item}")
 
-    # The driver must not write a fuel-gauge or charger register.
     for forbidden in ("i2c_write_reg", "i2c_write16", "i2c_write8"):
         if forbidden in battery:
             errors.append(f"e1s_battery.c has {forbidden}")
@@ -113,7 +112,6 @@ def main():
         if item.lower() not in hw.lower():
             errors.append(f"hardware map missing: {item}")
 
-    # Samsung's conversions, with vectors that exercise clamping and sign.
     for raw, expected in ((0x0000, 0), (0x3200, 500), (0x6400, 1000),
                           (0xFF00, 2550)):
         got = soc_01(raw)

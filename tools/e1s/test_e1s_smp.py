@@ -106,7 +106,6 @@ def main():
         if fn is None:
             print("test_e1s_smp: gcc not found, loader patch not exercised")
         else:
-            # The SMP tree already names the boot CPU: leave every reg alone.
             for mpidr in (0x000, 0x400, 0x900):
                 rc, out = patch(fn, smp_blob, mpidr)
                 if rc != 0:
@@ -114,13 +113,11 @@ def main():
                 elif cpu_regs(out)[1] != regs:
                     errors.append(f"loader changed the SMP map for {mpidr:#x}")
 
-            # A boot CPU outside the map replaces the first entry.
             rc, out = patch(fn, smp_blob, 0xa00)
             got = cpu_regs(out)[1]
             if rc != 0 or got[0] != 0xa00 or got[1:] != regs[1:]:
                 errors.append(f"loader did not replace cpu0 for 0xa00: {got}")
 
-            # The one-CPU tree still needs the live MPIDR written in.
             rc, out = patch(fn, default_blob, 0x900)
             got = cpu_regs(out)[1]
             if rc != 0 or got != [0x900]:

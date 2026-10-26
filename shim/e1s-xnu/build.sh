@@ -1,6 +1,4 @@
 #!/bin/sh
-# Build the experimental e1s XNU loader with the GNU AArch64 cross toolchain.
-# The Windows equivalent is build.ps1.
 set -eu
 cd "$(dirname "$0")"
 

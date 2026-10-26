@@ -1,4 +1,3 @@
-# Build the experimental e1s XNU loader with the Zig toolchain.
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $here '..\..')

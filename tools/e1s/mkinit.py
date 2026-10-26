@@ -102,7 +102,6 @@ def build(obj, entitlements=None):
     assert CODE_OFF + len(code) <= SEG, 'code does not fit in one __TEXT page'
     sect = struct.pack('<16s16sQQIIIIIIII', b'__text', b'__TEXT', BASE + CODE_OFF, len(code),
                        CODE_OFF, 3, 0, 0, S_ATTR_CODE, 0, 0, 0)
-    # The signature length depends only on the (fixed) __TEXT size: compute it first.
     sig_size = len(code_signature(bytes(SEG), SEG, SEG, entitlements))
     thread = struct.pack('<IIII', LC_UNIXTHREAD, 16 + 4 * ARM_THREAD_STATE64_COUNT,
                          ARM_THREAD_STATE64, ARM_THREAD_STATE64_COUNT)
@@ -129,7 +128,6 @@ def build(obj, entitlements=None):
 
 
 if __name__ == '__main__':
-    # mkinit.py OBJ OUT [ENTITLEMENTS.plist]
     ents = open(sys.argv[3], 'rb').read() if len(sys.argv) > 3 else None
     out = build(open(sys.argv[1], 'rb').read(), ents)
     open(sys.argv[2], 'wb').write(out)

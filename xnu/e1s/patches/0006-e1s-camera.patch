@@ -12,45 +12,10 @@ index a696d5e..7395c79 100644
  bsd/dev/e1s_ufs.c		standard
 diff --git a/bsd/dev/e1s_camera.c b/bsd/dev/e1s_camera.c
 new file mode 100644
-index 0000000..2c92b4d
+index 0000000..8903ede
 --- /dev/null
 +++ b/bsd/dev/e1s_camera.c
-@@ -0,0 +1,642 @@
-+/*
-+ * e1s cameras: the four SM-S921B sensors and the S5E9945 CSIS front end.
-+ *
-+ * This is a presence probe, not a capture driver.  The camera rails are
-+ * PMIC/ACPM-controlled, the sensor MCLKs are CMU outputs, and the CSIS/ISP
-+ * path needs SMMU and DMA programming; this kernel does not control any of
-+ * those yet.  What it can do safely is:
-+ *
-+ *   - report how S-Boot left the reset, MCLK and I2C pads;
-+ *   - bit-bang the sensor I2C bus and read the chip ID, if the rails and
-+ *     MCLK happen to be on;
-+ *   - optionally read the CSIS version registers.
-+ *
-+ * Nothing runs unless e1scam is given:
-+ *
-+ *   e1scam=1             pads and sensor ID probe
-+ *   e1scam=2             ... and the CSIS version summary
-+ *   e1scam_reset=1       pulse the sensor reset before the ID read
-+ *   e1scam_bus=NAME      only gn3, 3lu, 3k1 or imx564 (default: all)
-+ *
-+ * The camera power domain is not enabled here.  Reading CSIS registers with
-+ * e1scam=2 is opt-in because a register access to a gated block can hang the
-+ * phone's interconnect; the default (e1scam unset) never touches it.
-+ *
-+ * Wiring from arch/arm64/boot/dts/samsung/e1s/camera/ in the Samsung tree:
-+ *
-+ *   sensor  I2C    addr  reset   MCLK (gpg1)  CSIS  PHY
-+ *   GN3     hsi2c33 0x10 gpc0-0  ch2 pin2     1     C-PHY
-+ *   3LU     hsi2c43 0x10 gpp4-0  ch0 pin0     0     C-PHY
-+ *   3K1     hsi2c26 0x2d gpc4-1  ch3 pin3     2     D-PHY
-+ *   IMX564  hsi2c37 0x10 gpc0-1  ch1 pin1     3     C-PHY
-+ *
-+ * The reset and MCLK pads are reported but not driven unless e1scam_reset=1.
-+ * MCLK is never started: that needs the camera CMU, which is not ported.
-+ */
+@@ -0,0 +1,598 @@
 +#if defined(ARM64_BOARD_CONFIG_E1S)
 +
 +#include <kern/clock.h>
@@ -430,10 +395,6 @@ index 0000000..2c92b4d
 +	pin_input(bus->scl_bank, bus->scl_pin);
 +	i2c_delay();
 +
-+	/*
-+	 * If a sensor was interrupted mid-byte it can hold SDA low.  Clock it
-+	 * free before the first start condition.
-+	 */
 +	for (int i = 0; i < 9 && !i2c_sda_read(bus); i++) {
 +		i2c_scl_release(bus);
 +		i2c_delay();
@@ -450,11 +411,6 @@ index 0000000..2c92b4d
 +	pin_restore(&bus->scl_state);
 +}
 +
-+/*
-+ * Read a 16-bit register.  The sensor buses are wired with SDA/SCL in the
-+ * order the board DTS lists them, but the pin order is one of the things this
-+ * probe exists to check, so the caller can try the other order too.
-+ */
 +static int
 +i2c_read_register(const struct e1s_camera_sensor *sensor, bool swap,
 +    uint16_t reg, uint16_t *value)

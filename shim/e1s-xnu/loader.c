@@ -1,18 +1,10 @@
-/* SPDX-License-Identifier: GPL-2.0-only
- * Experimental Galaxy S24 (SM-S921B, e1s) XNU loader.
- *
- * This is not a working iOS boot: it only knows how to copy a SWEETXNU
- * payload out of the appended image, build boot_args and jump to XNU with
- * the MMU off. The e1s RAM window and timer values are still assumptions.
- */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include <stdint.h>
 #include "../e1s/font.h"
 #include "adt_patch.h"
 #include "fdt.h"
 #include "gic.h"
 
-/* What Samsung's bootloader normally leaves behind; the S-Boot device tree can
- * name a different base and the loader prefers that. */
 #define FB_BASE		0xFA200000UL
 #define FB_SIZE		0x009a4000UL
 #define FB_W		1080U
@@ -256,12 +248,6 @@ consider_gap(uint64_t start, uint64_t end, uint64_t *best_base, uint64_t *best_s
 	*best_size = size;
 }
 
-/*
- * Pick XNU's physical window from the memory map S-Boot passes in the DTB,
- * avoiding reserved-memory nodes, the framebuffer, the log, the boot loader
- * image and the DTB itself.  Returns 0 when the DTB has no usable /memory
- * node; the caller then keeps the payload's built-in window.
- */
 static int
 choose_window(uintptr_t dtb, uintptr_t loader_image, uint64_t loader_size,
     uint64_t fb_base, uint64_t fb_size, uint64_t *out_base, uint64_t *out_size)
@@ -343,8 +329,6 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	kv("SRE", (uint64_t)gi.sre);
 	out("\n");
 
-	/* Appended payload first. If it is absent, accept the S8/S-Boot initrd
-	 * convention so this loader can be tested without the append step. */
 	const struct payload *p = (const struct payload *)payload_addr();
 	if (!magic_ok(p->magic)) {
 		uint64_t rd_start, rd_end;
@@ -373,19 +357,8 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	if (!p->mem_size || p->mem_size > (4UL << 30))
 		return fail("bad payload RAM size");
 
-	/*
-	 * The payload's phys_base is only the fallback.  Pick the real window
-	 * from S-Boot's /memory and /reserved-memory nodes: the old built-in
-	 * value (0x880000000) is inside the high DRAM bank Samsung reserves for
-	 * the modem in the e1s device tree.
-	 */
 	uint64_t win_base = p->phys_base;
 	uint64_t win_size = p->mem_size;
-	/*
-	 * Keep the loader and the appended payload out of the window: S-Boot
-	 * loads the whole Image (loader + payload) contiguously, and XNU is
-	 * about to zero the window.  _head is the first byte of the Image.
-	 */
 	uintptr_t loader_image = (uintptr_t)_head;
 	uint64_t loader_size = 0x40000 + (32UL << 20);
 	if ((uintptr_t)p > loader_image)
@@ -410,9 +383,6 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	if (kernel_end >= mem_end)
 		return fail("kernel larger than RAM window");
 
-	/* Validate the whole payload before zeroing anything. An appended
-	 * payload can land at any address S-Boot chooses; if that overlaps the
-	 * XNU window, zeroing first would destroy the source. */
 	uint64_t adt_end = p->adt_off + p->adt_size;
 	if (adt_end < p->adt_off || adt_end > (256UL << 20))
 		return fail("bad ADT offset/size");
@@ -460,8 +430,6 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	copy(adt_pa, (uintptr_t)p + p->adt_off, p->adt_size);
 	if (adt_set_boot_cpu_mpidr(adt_pa, p->adt_size, (uint32_t)gi.mpidr))
 		return fail("ADT boot CPU MPIDR patch failed");
-	/* The ADT carries the generator's assumed map; replace it with the one
-	 * this phone actually has.  /pram goes near the top of the window. */
 	uint64_t pram_base = (win_base + win_size - 0x100000ULL) & ~(PAGE_16K - 1);
 	uint64_t pram_size = 0x80000;
 	if (adt_set_dram(adt_pa, p->adt_size, win_base, win_size) ||

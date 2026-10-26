@@ -12,53 +12,10 @@ index c336b4d..a696d5e 100644
  bsd/dev/redwood_goodix.c	standard
 diff --git a/bsd/dev/e1s_ufs.c b/bsd/dev/e1s_ufs.c
 new file mode 100644
-index 0000000..92f6663
+index 0000000..72bf0d8
 --- /dev/null
 +++ b/bsd/dev/e1s_ufs.c
-@@ -0,0 +1,1064 @@
-+/*
-+ * e1s UFS: the Exynos 2400 (S5E9945) UFS 4.0 host.
-+ *
-+ * This is a read-only block driver for the phone's internal storage.  It is
-+ * deliberately small: one polled command at a time, one logical unit (LUN 0),
-+ * one GPT partition, no interrupts.  The bootloader has already powered the
-+ * UFS rails, calibrated the PHY and brought the link up while it loaded the
-+ * BOOT image, so the driver reuses that state instead of re-running the
-+ * Exynos PHY/UNIPRO calibration.
-+ *
-+ * The host can be in either of the two UFSHCI submission modes:
-+ *
-+ *   - MCQ (UFS 4.0, what Samsung's Android driver uses): a submission queue
-+ *     of 32-byte UTRDs in normal memory, a completion queue of 32-byte CQEs,
-+ *     and the queue 0 head/tail registers in the SQD block at 0x17140000.
-+ *   - legacy single-doorbell mode: the UTRL at HCI+0x50 and the doorbell at
-+ *     HCI+0x58.  The older SWEET driver used this path.
-+ *
-+ * The mode is taken from UFS_MEM_CFG (HCI+0x300) bit 0, which is what
-+ * Samsung's driver sets after it has programmed the MCQ queues.  The driver
-+ * can be forced with e1sufs_mcq=1 or e1sufs_legacy=1 for a bring-up test.
-+ *
-+ * Addresses are from arch/arm64/boot/dts/exynos/s5e9945-ufs.dtsi:
-+ *   HCI    0x17100000 (0x3000)   MCQ registers at +0x400
-+ *   SQD    0x17140000 (0x15100)  queue 0 head/tail at +0x00/+0x04,
-+ *                                CQ head/tail at +0x40/+0x44
-+ *
-+ * The bootloader's queue memory is not reused.  All descriptors, the response
-+ * UPIU, the PRDT and a 1 MiB bounce buffer come from one physically
-+ * contiguous allocation owned by this kernel.  DMA is not coherent on this
-+ * SoC, so the caches are cleaned/invalidated around every command.  Writes
-+ * are refused.
-+ *
-+ * Boot arguments:
-+ *   e1sufs=0          do not touch the controller
-+ *   e1sufs_probe=0    do not print the register summary at bsd_init
-+ *   e1sufs_mcq=1      force MCQ submission
-+ *   e1sufs_legacy=1   force the legacy UTRL/doorbell path
-+ *   ufsroot=NAME      GPT partition name, default "userdata"
-+ *   ufs_lun=N         logical unit, default 0
-+ *
-+ * Root on it with rd=ufsroot0.
-+ */
+@@ -0,0 +1,984 @@
 +#if defined(ARM64_BOARD_CONFIG_E1S)
 +
 +#include <sys/param.h>
@@ -408,12 +365,6 @@ index 0000000..92f6663
 +	hci_wr(HCI_IE, 0);
 +	hci_wr(HCI_IS, hci_rd(HCI_IS));
 +
-+	/*
-+	 * Queue 0 is the queue Samsung's driver uses for device commands.
-+	 * If the bootloader left it running, stop it and disable it before
-+	 * replacing its rings.  Other queues are left alone: this kernel
-+	 * only ever posts to queue 0.
-+	 */
 +	sqd_wr(SQD_SQRTC, SQD_RTC_STOP);
 +	if (e1s_ufs_wait_set(sqd_rd, SQD_SQRTS, SQD_RTS_STOPPED) != 0) {
 +		printf("e1s-ufs: MCQ queue 0 did not stop (rts %08x)\n", sqd_rd(SQD_SQRTS));
@@ -428,11 +379,6 @@ index 0000000..92f6663
 +	uint64_t sq = su.dma_pa + DMA_SQ;
 +	uint64_t cq = su.dma_pa + DMA_CQ;
 +
-+	/*
-+	 * MAC is the maximum number of active commands, zero based.  The
-+	 * queue arrays hold twice the controller's transfer-slot count, so
-+	 * the controller's slot count is entries / 2.
-+	 */
 +	hci_wr(HCI_MCQ_CFG, (hci_rd(HCI_MCQ_CFG) & ~MCQ_CFG_MAC_MASK) |
 +	    (((entries / 2) - 1) << 8));
 +
@@ -448,10 +394,6 @@ index 0000000..92f6663
 +	hci_wr(cfg + MCQ_SQATTR, MCQ_QUEUE_ENABLE | qsize);
 +	__builtin_arm_dsb(0xf);
 +
-+	/*
-+	 * If this is a forced switch from the bootloader's legacy list,
-+	 * quiesce that list before selecting MCQ mode.
-+	 */
 +	uint32_t mem = hci_rd(HCI_MEM_CFG);
 +	if (!(mem & MEM_CFG_MCQ)) {
 +		if (hci_rd(HCI_HCS) & HCS_UTRL_READY) {
@@ -469,11 +411,6 @@ index 0000000..92f6663
 +		__builtin_arm_dsb(0xf);
 +	}
 +
-+	/*
-+	 * The queue is enabled but stopped, so the controller does not look
-+	 * at the ring yet.  Align the host's tail/head with the controller's
-+	 * current indices, then start it.
-+	 */
 +	uint32_t sq_head = sqd_rd(SQD_SQHP) / sizeof(struct e1s_utrd);
 +	uint32_t cq_tail = sqd_rd(SQD_CQTP) / sizeof(struct e1s_cqe);
 +	if (sq_head >= entries || cq_tail >= entries) {
@@ -560,12 +497,6 @@ index 0000000..92f6663
 +	ucd->cmd[15] = (uint8_t)len;
 +	memcpy(&ucd->cmd[16], cdb, cdb_len);
 +
-+	/*
-+	 * UTRD dword 0: command type 1 (UFS storage, what a UFS 2.0+ host
-+	 * uses for SCSI CDBs), data direction 2 (device to host) for reads,
-+	 * and the completion interrupt bit.  The controller overwrites the
-+	 * overall command status in dword 2.
-+	 */
 +	utrd->dw0 = (1U << 28) | ((len ? 2U : 0U) << 25) | (1U << 24);
 +	utrd->dw2 = 0x0f;                       /* OCS invalid until updated */
 +	utrd->ucdba = (uint32_t)ucd_pa;
@@ -998,22 +929,12 @@ index 0000000..92f6663
 +		return EINVAL;
 +	}
 +	su.lun = (uint8_t)lun;
-+	/*
-+	 * Samsung's driver allocates twice the advertised number of transfer
-+	 * slots for the MCQ queues (a controller erratum).  Match that layout.
-+	 */
 +	uint32_t slots = (su.cap & CAP_SLOTS_MASK) + 1U;
 +	su.entries = MIN(E1S_UFS_MAX_ENTRIES, slots * 2U);
 +	if (su.entries < 2) {
 +		su.entries = 2;
 +	}
 +
-+	/*
-+	 * The controller is 64-bit capable on this SoC, but keep the
-+	 * descriptors below 4 GiB when it is not, and let the allocator use
-+	 * the whole RAM window otherwise (the loader may place that window
-+	 * above 4 GiB).
-+	 */
 +	ppnum_t max_pnum = (su.cap & CAP_64_ADDRESSING) ? 0 : 0xfffff;
 +	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, max_pnum, 0,
 +	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
@@ -1078,7 +999,6 @@ index 0000000..92f6663
 +}
 +
 +
-+
 +#endif /* ARM64_BOARD_CONFIG_E1S */
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 index 16cf4fd..ac999f8 100644
@@ -1109,14 +1029,11 @@ diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
 index 29978e9..2bd419d 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -784,6 +784,24 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+@@ -784,6 +784,21 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
  		}
  	}
  
 +#if defined(E1S)
-+//
-+//	e1s: root on a GPT partition of the internal UFS (bsd/dev/e1s_ufs.c)
-+//
 +	if (strcmp(rdBootVar, "ufsroot0") == 0) {
 +		extern int e1s_ufs_rootdev(dev_t *dev);
 +		OSSafeReleaseNULL(matching);

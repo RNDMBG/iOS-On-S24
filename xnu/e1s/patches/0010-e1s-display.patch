@@ -12,43 +12,10 @@ index f5487bb..c15a50c 100644
  bsd/dev/e1s_touch.c		standard
 diff --git a/bsd/dev/e1s_display.c b/bsd/dev/e1s_display.c
 new file mode 100644
-index 0000000..fa56625
+index 0000000..240d3bc
 --- /dev/null
 +++ b/bsd/dev/e1s_display.c
-@@ -0,0 +1,275 @@
-+/*
-+ * e1s display state (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * HackiOS's display path is MiniIOMobileFramebuffer on top of the firmware
-+ * framebuffer: S-Boot leaves the DECON/DSIM pipeline running and XNU draws
-+ * into the buffer it was handed.  This file does not program that pipeline.
-+ * It reports what the bootloader left behind, which is what decides whether
-+ * the console can be seen at all:
-+ *
-+ *   - the framebuffer that PE mapped, always printed;
-+ *   - with e1sdisp=2, a read-only dump of DECON0..3, the DECON0 windows,
-+ *     RDMA0..3, DSIM0/1, the DCPHY0 PLL and DPU_MIPI_PHY_CON.
-+ *
-+ * The register dump is opt-in because an access to a power-gated DPU block
-+ * can hang the interconnect.  This is the same reason the camera probe is
-+ * opt-in.  Nothing here writes a register.
-+ *
-+ * Boot arguments:
-+ *   e1sdisp=0   no display report
-+ *   e1sdisp=1   framebuffer summary (default)
-+ *   e1sdisp=2   ... and the register dump
-+ *
-+ * Addresses from arch/arm64/boot/dts/exynos/s5e9945-drm-dpu.dtsi and the
-+ * register maps in drivers/gpu/drm/samsung/dpu/cal_rt/ of the Samsung tree:
-+ *
-+ *   DECON0 main    0x19100000   (DECON1..3 at +0x1000)
-+ *   DECON0 win     0x19110000   (16 windows, 0x1000 apart)
-+ *   DECON0 wincon  0x19130000   (16 windows, 0x1000 apart)
-+ *   DPUF0 DMA      0x19900000   (RDMA0..7, 0x1000 apart; EDMA at +0xE000)
-+ *   DSIM0          0x190B0000   (DSIM1 at 0x190C0000)
-+ *   DCPHY0         0x190E0100   (common block at 0x190E0000)
-+ *   disp_ss        0x19021000   (DPU_MIPI_PHY_CON at +0x0008)
-+ */
+@@ -0,0 +1,238 @@
 +#if defined(ARM64_BOARD_CONFIG_E1S)
 +
 +#include <console/video_console.h>
@@ -138,10 +105,6 @@ index 0000000..fa56625
 +		return;
 +	}
 +
-+	/*
-+	 * Read a few words across the buffer without touching every byte: the
-+	 * console mapping is write-combining, so reads go to the bus.
-+	 */
 +	words = (vinfo.v_rowbytes * vinfo.v_height) / 4;
 +	pixels = (volatile uint32_t *)vinfo.v_baseaddr;
 +	for (i = 0; i < 16; i++) {

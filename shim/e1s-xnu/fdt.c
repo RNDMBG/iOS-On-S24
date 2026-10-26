@@ -109,11 +109,6 @@ add_range(struct fdt_range *out, int max, int *count, uint64_t base, uint64_t si
 	(*count)++;
 }
 
-/*
- * Decode one "reg" property with the node's #address-cells/#size-cells.
- * Samsung's trees use 2/1 (a 12-byte entry), the usual FDT default is 2/2,
- * and simple test trees use 1/1, so all three shapes must work.
- */
 static void
 decode_reg(uintptr_t val, uint32_t len, uint32_t ac, uint32_t sc,
     struct fdt_range *out, int max, int *count)
@@ -222,13 +217,6 @@ fdt_reserved_ranges(uintptr_t fdt, struct fdt_range *out, int max)
 	return count;
 }
 
-/*
- * Find the display that S-Boot left behind.  The bootloader's device tree has
- * a reserved-memory (or simple-framebuffer) node for it; its reg is in DRAM,
- * which is what tells it apart from the DECON/DSIM register blocks.  Returns
- * 1 and fills the description when one is found; 0 leaves the caller's
- * built-in guess in place.
- */
 struct fb_candidate {
 	uint64_t base, size;
 	uint32_t width, height, stride;
@@ -254,11 +242,6 @@ fb_scan_node(const char *name, uint64_t base, uint64_t size, int have_reg,
 		score = 2;
 	if (score == 0)
 		return;
-	/*
-	 * More than one node can look like a display.  A framebuffer/splash
-	 * node beats a generic "display" reservation; among equals the smaller
-	 * region is more likely to be the panel buffer than a large carveout.
-	 */
 	if (best->found &&
 	    (score < best->score || (score == best->score && size > best->size)))
 		return;

@@ -11,8 +11,6 @@ checked before the file gets its final name.
 import os, struct, subprocess, sys, zlib
 
 
-# curl rather than urllib: urllib hangs on this host's broken IPv6 route to
-# Apple's CDN, curl falls back to IPv4.
 def curl(*args):
     return subprocess.run(['curl', '-sfL', '--max-time', '300', *args],
                           check=True, capture_output=True).stdout
@@ -20,7 +18,6 @@ def curl(*args):
 
 def get(url, start, end):
     data = curl('-r', f'{start}-{end}', url)
-    # A server ignoring Range would send the whole multi-GB file.
     assert len(data) == end - start + 1, f'bad range reply ({len(data)} bytes)'
     return data
 
@@ -81,7 +78,6 @@ def extract(url, entry, outdir):
     nlen, xlen = struct.unpack_from('<HH', hdr, 26)
     start = lho + 30 + nlen + xlen
     part = path + '.part'
-    # Compressed members restart (no resumable inflate state); stored ones resume.
     done = os.path.getsize(part) if method == 0 and os.path.exists(part) else 0
     inflate = zlib.decompressobj(-15) if method == 8 else None
     with open(part, 'ab' if done else 'wb') as out:

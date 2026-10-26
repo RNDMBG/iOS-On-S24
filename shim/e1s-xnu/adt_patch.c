@@ -244,12 +244,6 @@ set_node_u32_prop(uintptr_t adt, uint64_t size, uint32_t node,
 	return -1;
 }
 
-/*
- * The default ADT has one CPU child, so its "reg" has to become the live boot
- * MPIDR. An SMP ADT already carries the ten DTS MPIDRs: if the live MPIDR is
- * one of them, leave the tree alone; otherwise patch the first child, which
- * is what the one-CPU tree needs.
- */
 int adt_set_boot_cpu_mpidr(uintptr_t adt, uint64_t size, uint32_t mpidr)
 {
 	uint32_t cpus, nprops, nchildren, first = 0;

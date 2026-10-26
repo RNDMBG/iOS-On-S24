@@ -146,17 +146,17 @@ This build produced:
 | File | Size |
 | --- | ---: |
 | `shim/e1s-xnu/out/Image` | 106,496 bytes |
-| `out/e1s-boot-touch.img` | 16,359,440 bytes |
-| `out/e1s-boot-touch.img.tar` | 16,363,520 bytes |
+| `out/e1s-boot-touch.img` | 16,375,824 bytes |
+| `out/e1s-boot-touch.img.tar` | 16,384,000 bytes |
 
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `393c2a64e8e074b189707dcc6f14f736ee992257efcf378fbb3a4158233aa607`
+  `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68`
 - `e1s-boot-touch.img`:
-  `bedbcb22daeaa0e8ddf0630df09256a3914455354434a669d89ec221f9f8efb3`
+  `fc47a9e62bcd76fef8f55d0881ba1ef6c315345c3972a8f5ca6e5d3ffdacbcb9`
 - `e1s-boot-touch.img.tar`:
-  `b67d90ca4460660fc12586833bf487ac64d84021879772bfdd6c64140457239e`
+  `f056285ddacd8dfb41071b64e016b655ab3ccef2885cd7a53e18c3bfb6c0e197`
 
 The kernel payload at `0x1a000` now includes `0007` (ACPM/PMIC), `0008`
 (MAX77775 battery), `0009` (RTC calendar), `0010` (display state) and `0011`

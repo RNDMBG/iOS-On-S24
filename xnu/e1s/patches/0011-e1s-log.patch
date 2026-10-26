@@ -12,26 +12,10 @@ index c15a50c..fdcae8c 100644
  bsd/dev/e1s_ufs.c		standard
 diff --git a/bsd/dev/e1s_log.c b/bsd/dev/e1s_log.c
 new file mode 100644
-index 0000000..48e347a
+index 0000000..6396e61
 --- /dev/null
 +++ b/bsd/dev/e1s_log.c
-@@ -0,0 +1,113 @@
-+/*
-+ * e1s persistent console log (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * The phone is also the daily driver, so a boot that shows nothing on the
-+ * panel still has to leave evidence.  The loader already writes its own log
-+ * at 0x91200000, Samsung's 2 MiB sec_debug_next reservation.  This driver
-+ * uses the second MiB of that reservation for a ring of everything that
-+ * reaches the XNU console: the display probe, PMIC/ACPM results, UFS, and a
-+ * panic.  The loader's record at the base is left alone.
-+ *
-+ * The ring is mapped uncached with ml_io_map, so it works before the UFS
-+ * driver and from panic context.  It is written by _cnputs (the same hook the
-+ * old SWEET persistent log used).  Dump 2 MiB at 0x91200000 from the recovery
-+ * and run tools/e1s/read_log.py on it; that prints both E1SXNU01 (loader) and
-+ * E1SXNU02 (this ring).  `e1slog=0` disables it.
-+ */
+@@ -0,0 +1,93 @@
 +#if defined(ARM64_BOARD_CONFIG_E1S)
 +
 +#include <libkern/libkern.h>
@@ -79,10 +63,6 @@ index 0000000..48e347a
 +	memcpy((void *)e1s_log, &header, sizeof(header));
 +}
 +
-+/*
-+ * Called for every console output, in any context.  It must not block, print,
-+ * or take a lock; a torn record is preferable to losing the earlier bytes.
-+ */
 +void
 +e1s_log_append(const char *c, int size)
 +{

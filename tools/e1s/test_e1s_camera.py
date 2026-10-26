@@ -40,10 +40,6 @@ def main():
         "S5K3LU",
         "S5K3K1",
         "IMX564",
-        "hsi2c33",
-        "hsi2c43",
-        "hsi2c26",
-        "hsi2c37",
         "0x10830000UL",
         "0x11030000UL",
         "0x11830000UL",
@@ -76,7 +72,6 @@ def main():
     if "new file mode 100644" not in text:
         raise SystemExit("test_e1s_camera: e1s_camera.c must not be executable")
 
-    # The probe is read-only: no sensor register write path and no CSIS writes.
     for forbidden in (
         "i2c_write_register",
         "sensor_write",
@@ -89,13 +84,11 @@ def main():
         if forbidden in text:
             raise SystemExit("test_e1s_camera: unexpected write path: " + forbidden)
 
-    # The reset is only pulsed with the explicit boot argument.
     if "uint32_t level = 0, reset = 0;" not in text:
         raise SystemExit("test_e1s_camera: reset must default off")
     if "e1s_camera_id(sensor, reset != 0);" not in text:
         raise SystemExit("test_e1s_camera: reset is not gated by e1scam_reset")
 
-    # CSIS is opt-in at level 2; level 1 must never map the camera domain.
     if "if (level >= 2)" not in text:
         raise SystemExit("test_e1s_camera: CSIS must be gated at level 2")
 

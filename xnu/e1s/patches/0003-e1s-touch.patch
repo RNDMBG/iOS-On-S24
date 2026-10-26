@@ -12,41 +12,10 @@ index f8daa11..c336b4d 100644
  bsd/dev/redwood_goodix.c	standard
 diff --git a/bsd/dev/e1s_touch.c b/bsd/dev/e1s_touch.c
 new file mode 100644
-index 0000000..f55acdc
+index 0000000..a6aa6d5
 --- /dev/null
 +++ b/bsd/dev/e1s_touch.c
-@@ -0,0 +1,396 @@
-+/*
-+ * e1s touch: the STM controller on SPI9 (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * The controller is an STM "STM_TS" part with Samsung firmware; its protocol
-+ * is the one in drivers/input/sec_input/stm_spi/ of Samsung's Android kernel.
-+ * There is no SPI framework or clock driver in this kernel, so the transfer
-+ * is done by hand on the four SPI9 pins and the interrupt line is polled.
-+ *
-+ * Wiring from the e1s board DTS (docs/e1s-hardware-map.md):
-+ *
-+ *   SPI9 CLK   gpp9-2   PERIC1 + 0xe0, CON[11:8], DAT bit 2
-+ *   SPI9 MOSI  gpp9-1   PERIC1 + 0xe0, CON[7:4],  DAT bit 1
-+ *   SPI9 MISO  gpp9-0   PERIC1 + 0xe0, CON[3:0],  DAT bit 0
-+ *   SPI9 CS    gpp9-3   PERIC1 + 0xe0, CON[15:12], DAT bit 3
-+ *   IRQ        gpa1-2   ALIVE  + 0x20, DAT bit 2, active low
-+ *
-+ * The pin -> signal assignment follows the USI09 pad order of the SoC
-+ * (gpp9-2/1/0 are the spi9_bus pins in the DTS, gpp9-3 is spi9_cs).  It is a
-+ * hypothesis until the device ID is read on a phone; if the probe prints
-+ * "no response", that is the first thing to check.
-+ *
-+ * The STM chip is powered by PMIC LDO18 (I/O) and LDO9 (AVDD).  This kernel
-+ * cannot reach the PMIC's ACPM mailbox yet, so the driver depends on S-Boot
-+ * having left those rails on.  The probe at start-up says whether it did.
-+ *
-+ * Boot arguments:
-+ *   e1stouch=0        do not start the driver
-+ *   e1stouch_poll_us  poll interval, default 4000
-+ *   e1stouch_delay    bit-bang half-period loop count, default 400
-+ *   e1stouch_flip     1 mirror X, 2 mirror Y, 3 both
-+ */
+@@ -0,0 +1,356 @@
 +#include <kern/clock.h>
 +#include <kern/thread.h>
 +#include <libkern/libkern.h>
@@ -193,10 +162,6 @@ index 0000000..f55acdc
 +	pin_set(E1S_GPP9_DAT, E1S_SPI_CS_PIN, true);
 +}
 +
-+/*
-+ * The write framing of stm_ts_no_lock_spi_write(): the commands the chip
-+ * treats as opcodes go out as they are, everything else is prefixed 0xC0.
-+ */
 +static void
 +stm_write(const uint8_t *reg, uint32_t tlen, const uint8_t *data, uint32_t len)
 +{
@@ -233,11 +198,6 @@ index 0000000..f55acdc
 +	return 0;
 +}
 +
-+/*
-+ * Read an address through the STM "custom read" frame: write the address
-+ * (0xC0 prefixed), then send 0xD1 0x00 0x00 and take the payload four bytes
-+ * into the reply, exactly as stm_ts_spi_read() does for tlen <= 3.
-+ */
 +static int
 +stm_read_address(uint8_t address, uint8_t *buf, uint32_t len)
 +{

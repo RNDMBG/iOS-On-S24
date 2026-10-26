@@ -172,7 +172,6 @@ def main():
         if item.lower() not in hw.lower():
             errors.append(f"hardware map missing: {item}")
 
-    # ACPM MFD bitfields from include/soc/samsung/acpm_mfd.h.
     cmd0, cmd1 = mfd_cmd(0, 0x0D, 0x34, 0x1D)
     if cmd0 != 0x1D34 or cmd1 != 0x0D000000:
         errors.append(f"read command packed to {cmd0:08x}/{cmd1:08x}")
@@ -185,8 +184,6 @@ def main():
     if cmd1 != (0x0D000000 | 2 | (0xC0 << 8) | (0xC0 << 16)):
         errors.append(f"update command packed to {cmd0:08x}/{cmd1:08x}")
 
-    # Channel descriptor layout: id u8, field u32, owner/type u8, channel_info
-    # (7 u32 then q_len/elem/credit/skip), ap_poll u8 -> 48 bytes.
     sram = bytearray(0x3A000)
     init = 0x9D00
     channels = init + 0x100
@@ -199,8 +196,6 @@ def main():
     sram[base + 8] = 0
     sram[base + 9] = 0
     ch = base + 12
-    # The descriptor is from the APM's side: rx_* is the AP's TX queue and
-    # tx_* is the AP's RX queue.
     struct.pack_into("<I", sram, ch + 4, 0x1000)   # APM rx_rear  (AP TX)
     struct.pack_into("<I", sram, ch + 8, 0x1000)   # APM rx_front (AP TX)
     struct.pack_into("<I", sram, ch + 12, 0x2000)  # APM rx_base  (AP TX)
@@ -221,8 +216,6 @@ def main():
     if (struct.unpack_from("<I", sram, ch + 24)[0] + 4 * 16) > len(sram):
         errors.append("synthetic AP RX queue range check failed")
 
-    # The enable path uses the board's voltage selector for the dedicated
-    # touch/panel rails and sets both enable bits.
     for sel, expected in ((0x18, 0xD8), (0x30, 0xF0), (0x00, 0xC0)):
         value = (sel & 0x3F) | 0xC0
         if value != expected:

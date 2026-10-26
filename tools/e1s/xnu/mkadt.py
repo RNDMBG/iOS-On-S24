@@ -10,30 +10,20 @@ import hashlib, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
-# Experimental: the S24 RAM map is chosen by the loader from the S-Boot DTB.
-# This is the fallback used by the ADT/payload before the loader rewrites it:
-# the low DRAM bank at 0xA0000000, clear of the fixed Samsung reservations in
-# s5e9945-rmem.dtsi (0x8FF00000 sgpu, 0xC5000000 S2MPU, 0xED310000 TEE).
-# The old 0x880000000 value sat inside the modem's cp_rmem.
 PHYS_BASE = 0xA0000000
 MEM_SIZE = 0x20000000
 HIGH_PHYS_BASE = PHYS_BASE
 HIGH_MEM_SIZE = MEM_SIZE
-# /arm-io children are relative to this; it must not be 0 (serial_init bails)
 SOC_BASE = 0x10000000
 
 GICD, GICD_SIZE = 0x10200000, 0x10000
 GICR, GICR_SIZE = 0x10240000, 0x140000
 FB, FB_SIZE = 0xFA200000, 0x009a4000
-# The S8 SWEET UFS root driver is UFSHCI, not Qualcomm-specific. S24 exposes
-# its host at 0x17100000; S-Boot leaves it enabled while loading BOOT.
-# UFS 4.0 may use MCQ rather than the legacy UTRL path, so this is speculative.
 UFS, UFS_SIZE = 0x17100000, 0x3000
 SWEET_ECID = 0x4531533234000001  # 'E1S2' + 4, synthetic (not the phone ECID)
 FB_W, FB_H, FB_STRIDE = 1080, 2340, 1080 * 4
 TIMEBASE = 25600000
 VTIMER_INTID = 27  # virtual timer PPI 11 (16 + 11)
-# QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
 QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
 
@@ -84,12 +74,6 @@ def build_nvram_image():
 
 NVRAM_IMAGE = build_nvram_image()
 
-# The iOS userland is the iPhone X (iPhone10,3 / D22AP) IPSW. MobileGestalt
-# derives product type, device class, home-button-less UI, artwork etc. from
-# the root identity and /product of the real D22AP device tree. That tree is
-# an Apple artifact (kept out of git): extract it from the IPSW with
-#   tools/remotezip.py URL DeviceTree.d22ap.im4p DIR
-#   ipsw img4 im4p extract DIR/Firmware/all_flash/DeviceTree.d22ap.im4p -o d22ap.adt
 D22AP_ADT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../../research/ipsw-x/d22ap.adt')
 
 
@@ -139,9 +123,6 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
         ('display-rotation', u32(0)),
         ('firmware-version', cstr('iBoot-8422.100.650')),
         ('system-firmware-version', cstr('iBoot-8422.100.650')),
-        # MobileGestalt builds the device identifier (UDID) from the serial
-        # number, the chip ID and the two addresses.  Synthetic values: this
-        # is not a real iPhone, but they must be present or lsd waits forever.
         ('mac-address-wifi0', bytes([0x02, 0x53, 0x32, 0x34, 0x00, 0x01])),
         ('mac-address-bluetooth0', bytes([0x02, 0x53, 0x32, 0x34, 0x00, 0x02])),
         ('software-behavior', b'\0' * 16),
@@ -149,50 +130,23 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
         ('production-cert', u32(1)),
         ('development-cert', u32(0)),
         ('embedded-panic-log-size', u32(PANIC_LOG_SIZE)),
-        # iBoot hands the kernel a CHRP-format copy of NVRAM; IOKit asserts
-        # when the node is missing.
         ('nvram-bank-size', u32(NVRAM_BANK_SIZE)),
         ('nvram-bank-count', u32(1)),
         ('nvram-current-bank', u32(0)),
         ('nvram-proxy-data', NVRAM_IMAGE),
-        # iBoot's SHA-384 of the boot manifest; /sbin/mount -P 1 exits unless
-        # it exists (bind mounts /private/preboot/<hex>/usr/standalone/firmware,
-        # tolerating a missing directory). Fixed stand-in value.
         ('boot-manifest-hash', BOOT_MANIFEST_HASH),
-        # libimg4 (cryptexd) aborts "failed to get crypto algorithm" without
-        # it; real A11+ device trees say sha2-384.
         ('crypto-hash-method', cstr('sha2-384')),
-        # Native e1s panel: 1080x2340 @3x = 360x780 points. This is not an
-        # iPhone layout; the first scaffold uses sweetfb_native=1.
         ('display-scale', u32(3)),
-        # XNU derives IOPlatformUUID (gethostuuid) from these on arm; without
-        # them CFPreferences cannot use kCFPreferencesCurrentHost (no ByHost
-        # files), so e.g. DataMigration never records LastSystemVersion and
-        # migrates on every boot. Synthetic ECID (not the phone's); chip-id
-        # of the A11 that the iPhone X userland expects.
         ('unique-chip-id', struct.pack('<Q', SWEET_ECID)),
         ('chip-id', u32(0x8015)),
         ('board-id', u32(0x06)),
-        # Security status as on a dev-fused, undemoted board (tuple 0,0,1,1):
-        # MobileGestalt reads these from /chosen, and mobileactivationd's
-        # DeviceType then takes its native "Hactivation" branch (state
-        # Activated without an activation record; no SEP, no baseband here).
         ('certificate-production-status', u32(0)),
         ('effective-production-status-ap', u32(0)),
         ('certificate-security-mode', u32(1)),
         ('effective-security-mode-sep', u32(1)),
     ], [node('memory-map', [ph()]),
-        # Local boot policy (kern_csr.c): SIP relaxed like `csrutil disable`
-        # (lp-sip0: untrusted kexts, unrestricted FS, task_for_pid, kernel
-        # debugger, dtrace, nvram), lp-sip1: unauthenticated (unsealed) root.
-        # The iOS shared cache is in no trust cache, so dyld can only map it
-        # with CSR_ALLOW_UNRESTRICTED_FS (vm_unix.c shared region checks).
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
-    # The DTS map is cpu@0..cpu@900: four clusters of 4 + 3 + 2 + 1 cores, with
-    # cpu0..3 in the little (Cortex-A520) cluster. Only the boot CPU is
-    # published by default. --smp publishes all ten; the loader keeps the
-    # boot CPU's "reg" matching the live MPIDR either way.
     if smp:
         cpu_table = [
             (0x000, 0, 0, True), (0x100, 0, 1, True),
@@ -210,7 +164,6 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
             ph(),
             ('device_type', cstr('cpu')),
             ('compatible', cstr('samsung,exynos2400') + cstr('arm,armv8')),
-            # The loader makes this match the live boot MPIDR before XNU starts.
             ('reg', u32(mpidr)),
             ('cpu-id', u32(index)),
             ('cluster-id', u32(cluster)),
@@ -252,12 +205,7 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
         ('#size-cells', u32(2)),
         ('ranges', u64(0, SOC_BASE, 0x100000000 - SOC_BASE)),
     ], [gic,
-        # No hardware: watchdogd checks IODeviceTree:/arm-io/wdt for no-pmu and
-        # otherwise crashes trying to set the PMU boot stage (customer builds
-        # ignore the -wdt_no_pmu boot-arg).
         node('wdt', [ph(), ('no-pmu', u32(1))]),
-        # Native e1s panel for the first scaffold; sweetfb_native=1 is passed
-        # by the loader so SweetFramebuffer does not present 1125x2436.
         node('disp0', [
             ph(),
             ('device_type', cstr('display-subsystem')),
@@ -274,17 +222,12 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
         ('stride', u32(FB_STRIDE)),
     ])
 
-    # sweet_ufs.c looks up /sweet-ufs and maps its reg property; the driver
-    # itself is standard UFSHCI. Keep it out of the QEMU tree (QEMU has no
-    # controller at this address).
     ufs = node('sweet-ufs', [
         ph(),
         ('compatible', cstr('samsung,ufshci') + cstr('sweet,ufs')),
         ('reg', u64(UFS, UFS_SIZE)),
     ])
 
-    # MobileGestalt HomeButtonType = IODeviceTree:/buttons home-button-type
-    # (D22AP: 2, no Home button; absent = 0 = Home-button device).
     buttons = node('buttons', [
         ph(),
         ('button-names', cstr('volup') + cstr('voldown') + cstr('hold')),
@@ -293,26 +236,16 @@ def build(seed=None, qemu=False, highmem=False, smp=False):
     ])
 
     product_props = d22ap_product()
-    # The S24 framebuffer is sRGB 8-bit. The iPhone X tree says P3, which
-    # makes WebKit render into 10-bit surfaces this kernel does not provide.
     if product_props:
         product_props = [(k, cstr('sRGB') if k == 'artwork-display-gamut' else v)
                          for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
-    # The same nodes HackiOS's loader adds for IOKit and iOS userland.
     options = node('options', [ph()])
     pram = node('pram', [ph(), ('reg', u64(PANIC_LOG_BASE, PANIC_LOG_SIZE))])
-    # pmap_compute_max_asids requires the node even when no overrides are set.
-    # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
-    # No effaceable storage: keybagd then reads /private/var/keybags/systembag.kb
-    # as a plain plist instead of decrypting it with the effaceable key.
     kernel_defaults = node('defaults', [ph(), ('kern.vm_compressor', u32(2)),
                                         ('no-effaceable-storage', u32(1))])
 
-    # Identity of the iPhone X userland: compatible[0] is hw.model/hw.target
-    # (D22AP), model is hw.machine/hw.product (iPhone10,3).  This matches the
-    # root of the HackiOS loader's device tree rather than the old SWEET one.
     return node('device-tree', [
         ph(),
         ('compatible', cstr('D22AP') + cstr('AppleARM') + cstr('iPhone10,3')),

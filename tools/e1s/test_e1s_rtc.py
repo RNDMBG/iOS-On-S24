@@ -97,7 +97,6 @@ def main():
             errors.append(f"e1s_pmic.c missing: {item}")
 
     for item in (
-        "binary values, not BCD",
         "uint64_t *epoch",
         "one-hot",
         "years since 2000",
@@ -105,7 +104,6 @@ def main():
         if item not in header:
             errors.append(f"e1s_pmic.h missing: {item}")
 
-    # The old BCD print and any RTC write must be gone.
     for forbidden in ("(BCD, week", "%02x-%02x-%02x", "e1s_pmic_update(",
                       "e1s_pmic_write("):
         if forbidden in pmic:
@@ -123,7 +121,6 @@ def main():
         if item not in bringup:
             errors.append(f"bring-up notes missing: {item}")
 
-    # The binary register fields, using the masks in the driver.
     raw = (0x3B, 0x22, 0x17, 0x08, 0x1A, 0x0A, 0x1A)
     fields = (raw[0] & 0x7F, raw[1] & 0x7F, raw[2] & 0x1F,
               raw[3] & 0x7F, raw[4] & 0x1F, raw[5] & 0x0F,

@@ -31,7 +31,6 @@ def im4p_payload(buf):
         items.append((t, buf[vs:ve]))
         off = ve
     assert items[0][1] == b'IM4P', items[0]
-    # optional trailing items: KBAG (OCTET STRING) = encrypted, SEQUENCE = compression info
     info = {'type': items[1][1].decode(), 'desc': items[2][1].decode(),
             'encrypted': any(t == 0x04 for t, _ in items[4:])}
     payload = items[3][1]

@@ -1,11 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
- * Experimental Galaxy S24 (SM-S921B, e1s) XNU loader entry.
- *
- * This is an arm64 Linux Image so Samsung S-Boot treats it as a kernel. It
- * is position independent and expects to be entered with the MMU off. The
- * SWEETXNU payload is appended after _payload_start by
- * tools/e1s/append_payload.py.
- */
+/* SPDX-License-Identifier: GPL-2.0-only */
 	.section .text.head, "ax"
 	.globl _head
 _head:
@@ -100,9 +93,6 @@ halt:
 	wfe
 	b	halt
 
-/* Runtime address of the appended payload. adr is PC relative, so this works
- * wherever S-Boot loaded the Image (the rest of the loader is position
- * independent too). */
 	.globl payload_addr
 payload_addr:
 	adr	x0, _payload_start

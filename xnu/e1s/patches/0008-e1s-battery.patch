@@ -12,42 +12,10 @@ index 79f6a07..f5487bb 100644
  bsd/dev/e1s_pmic.c		standard
 diff --git a/bsd/dev/e1s_battery.c b/bsd/dev/e1s_battery.c
 new file mode 100644
-index 0000000..89d47e9
+index 0000000..7e373e8
 --- /dev/null
 +++ b/bsd/dev/e1s_battery.c
-@@ -0,0 +1,506 @@
-+/*
-+ * e1s battery and charger monitor (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * The charger/fuel-gauge is a Maxim MAX77775.  The MFD answers at 7-bit
-+ * address 0x66 on hsi2c_16; the fuel gauge is at 0x36 and the charger at
-+ * 0x69 on the same bus.  The board wires that bus to gpp8-0 (SCL) and
-+ * gpp8-1 (SDA), which is USI08 in PERIC1.
-+ *
-+ * S-Boot leaves the chip running, because it is what charges the phone.
-+ * This driver only reads it, over a bit-banged I2C bus; it never writes a
-+ * charger register, so the charging limits and the protection stay owned by
-+ * the firmware.  The readings are handed to HackiOS's power-source layer
-+ * through redwood_battery_report(), which creates the RedwoodBattery
-+ * IOPMPowerSource on the first report.
-+ *
-+ * The conversions are Samsung's, from
-+ * drivers/battery/fuelgauge/max77775_fuelgauge/max77775_fuelgauge.c:
-+ *
-+ *   REPSOC    0.1 %
-+ *   VCELL     78.125 uV per LSB (12-bit mantissa plus 4-bit exponent)
-+ *   CURRENT   1.5625 uV / Rsense per LSB
-+ *   TEMP      1 C per high-byte LSB plus 0.0390625 C per low byte
-+ *   capacity  0.5 mAh * (10 mOhm / Rsense) per LSB
-+ *
-+ * e1s sets fuelgauge,fg_resistor = <5>, Samsung's code for a 2 mOhm sense
-+ * resistor (fg_resistor = 10 mOhm / Rsense).  One current LSB is therefore
-+ * 15625 * 5 / 100 = 781.25 uA and one capacity LSB is 5 / 2 = 2.5 mAh.
-+ *
-+ * Boot arguments:
-+ *   e1sbattery=0  do not probe the fuel gauge
-+ *   e1sbattery=1  read it (default)
-+ */
+@@ -0,0 +1,470 @@
 +#include <kern/clock.h>
 +#include <kern/thread.h>
 +#include <libkern/libkern.h>
@@ -294,10 +262,6 @@ index 0000000..89d47e9
 +	i2c_scl_release();
 +	i2c_delay();
 +
-+	/*
-+	 * If the chip or the bootloader was interrupted mid-byte it can hold
-+	 * SDA low.  Clock it free before the first start condition.
-+	 */
 +	for (int i = 0; i < 9 && !i2c_sda_read(); i++) {
 +		i2c_scl_release();
 +		i2c_delay();

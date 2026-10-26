@@ -15,40 +15,10 @@ index 7395c79..79f6a07 100644
  bsd/dev/redwood_input.c		standard
 diff --git a/bsd/dev/e1s_acpm.c b/bsd/dev/e1s_acpm.c
 new file mode 100644
-index 0000000..c347ca7
+index 0000000..1370ee9
 --- /dev/null
 +++ b/bsd/dev/e1s_acpm.c
-@@ -0,0 +1,481 @@
-+/*
-+ * e1s ACPM mailbox and PMIC bus (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * The application processor does not own the PMIC bus.  S-Boot starts an
-+ * always-on firmware ("APM") on the S5E9945, and that firmware owns the SPMI
-+ * bus to the S2MPS27/S2MPS28 PMICs.  XNU talks to it through the AP2APM
-+ * mailbox at 0x12B90000 and the APM SRAM at 0x02055000.
-+ *
-+ * The firmware has already built the channel table in SRAM when S-Boot hands
-+ * over.  This driver does not reinitialize the firmware: it reads the table,
-+ * finds the PMIC channel (channel 2 on this board), and reuses the queue
-+ * descriptors the firmware published.  That is the same arrangement Linux
-+ * uses in drivers/soc/samsung/acpm/acpm_ipc.c, without the Linux device
-+ * model and workqueues.
-+ *
-+ * Only the commands the PMIC driver asks for are sent.  A read is one command
-+ * and one response; a write is the same round trip.  Nothing is written to
-+ * the PMIC unless the caller asks for it, and the PMIC driver keeps writes
-+ * behind a boot argument.
-+ *
-+ * The queue fields in the channel descriptor are named from the APM's point
-+ * of view: its rx_* fields are the AP's transmit queue, and its tx_* fields
-+ * are the AP's receive queue.  This driver names them from the AP's side.
-+ *
-+ * Mailbox register layout (APM is the mailbox master on e1s):
-+ *   INTGR0 +0x08  interrupt generate, master -> APM, bits [31:16]
-+ *   INTCR1 +0x20  interrupt clear, APM -> master, bits [7:0]
-+ *   INTMR1 +0x24  interrupt mask
-+ *   INTSR1 +0x28  interrupt status
-+ */
+@@ -0,0 +1,441 @@
 +#include <kern/clock.h>
 +#include <kern/locks.h>
 +#include <libkern/libkern.h>
@@ -209,11 +179,6 @@ index 0000000..c347ca7
 +		}
 +		e1s_acpm_sync();
 +
-+		/*
-+		 * Remove the matched entry the way the Linux driver does: move
-+		 * the oldest entry into its place, then advance the rear.  The
-+		 * queue is small and this keeps unrelated responses intact.
-+		 */
 +		if (i != rear) {
 +			uint8_t *old = (uint8_t *)(e1s_acpm_sram + ch->rx_base +
 +			    rear * ch->elem_size);
@@ -383,11 +348,6 @@ index 0000000..c347ca7
 +		ap_poll = slot[base + 44];
 +		found++;
 +
-+		/*
-+		 * The descriptor is written from the APM's point of view:
-+		 * its tx_* queues are the AP's receive side, and its rx_*
-+		 * queues are the AP's transmit side.
-+		 */
 +		printf("e1s-acpm: ch%u id=%u type=%u len=%u elem=%u poll=%u "
 +		    "aprx=0x%x/%u/%u aptx=0x%x/%u/%u\n",
 +		    i, id, type, q_len, elem, ap_poll,
@@ -501,10 +461,10 @@ index 0000000..c347ca7
 +	return 0;
 +}
 diff --git a/bsd/dev/e1s_input.c b/bsd/dev/e1s_input.c
-index 8a79d13..7b44c88 100644
+index 29638e2..7dc3fcf 100644
 --- a/bsd/dev/e1s_input.c
 +++ b/bsd/dev/e1s_input.c
-@@ -13,6 +13,7 @@
+@@ -2,6 +2,7 @@
  #include <kern/thread.h>
  #include <arm/machine_routines.h>
  #include <pexpert/pexpert.h>
@@ -512,7 +472,7 @@ index 8a79d13..7b44c88 100644
  #include <sys/redwood_input.h>
  #include <sys/systm.h>
  
-@@ -32,6 +33,8 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+@@ -21,6 +22,8 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
  {
  	vm_offset_t base;
  	uint32_t stable, last, count = 0;
@@ -521,24 +481,19 @@ index 8a79d13..7b44c88 100644
  	thread_t thread;
  
  	base = ml_io_map(E1S_ALIVE_GPIO_BASE, 0x1000);
-@@ -46,6 +49,7 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
- 	 */
+@@ -31,6 +34,7 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+ 
  	stable = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
  	last = 1U;
 +	pwr_available = e1s_pmic_ready();
  
  	for (;;) {
  		uint32_t raw = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
-@@ -63,6 +67,33 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
+@@ -48,6 +52,28 @@ e1s_keys_thread(void *arg __unused, wait_result_t result __unused)
  			    REDWOOD_BUTTON_VOLUME_UP, 0, 0);
  			last = stable;
  		}
 +
-+		/*
-+		 * The power key is an input of the S2MPS27, not an SoC GPIO.
-+		 * Its real-time status bit is high while the key is held.  Only
-+		 * poll it when the ACPM/PMIC probe succeeded.
-+		 */
 +		if (pwr_available && ++pwr_div >= 10) {
 +			uint32_t pwr_raw;
 +
@@ -563,7 +518,7 @@ index 8a79d13..7b44c88 100644
  		delay_for_interval(E1S_KEY_POLL_MS, NSEC_PER_MSEC);
  	}
  }
-@@ -79,10 +110,11 @@ e1s_input_init(void)
+@@ -64,10 +90,11 @@ e1s_input_init(void)
  	}
  
  	if (kernel_thread_start(e1s_keys_thread, NULL, &thread) == KERN_SUCCESS) {
@@ -579,36 +534,10 @@ index 8a79d13..7b44c88 100644
  
 diff --git a/bsd/dev/e1s_pmic.c b/bsd/dev/e1s_pmic.c
 new file mode 100644
-index 0000000..7b0a9c6
+index 0000000..71982c5
 --- /dev/null
 +++ b/bsd/dev/e1s_pmic.c
-@@ -0,0 +1,299 @@
-+/*
-+ * e1s PMIC control (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * Reads and writes go through the ACPM mailbox driver in e1s_acpm.c.  The
-+ * registers named here are from Samsung's s2mps27/s2mps28 drivers, and the
-+ * board wiring is from the e1s device tree:
-+ *
-+ *   LDO9   touch AVDD   3.0 V
-+ *   LDO18  touch I/O    1.8 V
-+ *   LDO10  panel VCI    3.0 V
-+ *   LDO17  panel VDD3   1.8 V
-+ *   LDO8   UFS VCC
-+ *   S2MPS28_4 LDO5 UFS VCCQ
-+ *
-+ * S-Boot normally leaves the UFS and panel rails on because it needs them.
-+ * Touch is the interesting case: the first XNU image depends on S-Boot having
-+ * left LDO9/LDO18 enabled.  `e1spmic=2` enables them explicitly, but that is
-+ * opt-in because it is the first write this port makes to a PMIC.
-+ *
-+ * Boot arguments:
-+ *   e1spmic=0  do not touch ACPM or the PMIC at all
-+ *   e1spmic=1  probe ACPM and read the PMIC registers (default)
-+ *   e1spmic=2  enable the touch rails LDO9/LDO18
-+ *   e1spmic=3  enable the touch rails and the panel rails LDO10/LDO17
-+ *   e1spmic=4  report (but do not change) the UFS rails
-+ */
+@@ -0,0 +1,268 @@
 +#include <kern/clock.h>
 +#include <libkern/libkern.h>
 +#include <pexpert/pexpert.h>
@@ -672,11 +601,6 @@ index 0000000..7b0a9c6
 +		return 0;
 +	}
 +
-+	/*
-+	 * The rails this driver enables are dedicated to the touch or the
-+	 * panel, so use the board's selector instead of a voltage the
-+	 * firmware may have left from an earlier use.
-+	 */
 +	value = (sel & E1S_PMIC_LDO_VSEL_MASK) | E1S_PMIC_LDO_ENABLE;
 +
 +	error = e1s_pmic_write(sid, type, ctrl, value);
@@ -929,17 +853,10 @@ index d26f4e9..71bd6cc 100644
  		e1s_ufs_probe();                /* read-only UFS register summary */
 diff --git a/bsd/sys/e1s_pmic.h b/bsd/sys/e1s_pmic.h
 new file mode 100644
-index 0000000..34826ea
+index 0000000..280ba51
 --- /dev/null
 +++ b/bsd/sys/e1s_pmic.h
-@@ -0,0 +1,87 @@
-+/*
-+ * e1s PMIC and ACPM interfaces (Samsung Galaxy S24, SM-S921B).
-+ *
-+ * The PMIC itself is behind the APM firmware; callers use the SID/type/register
-+ * addressing of Samsung's SPMI PMIC drivers.  Reads are always allowed.  Writes
-+ * go through e1s_pmic_init()'s boot-argument gate.
-+ */
+@@ -0,0 +1,79 @@
 +#ifndef _SYS_E1S_PMIC_H_
 +#define _SYS_E1S_PMIC_H_
 +
@@ -970,7 +887,6 @@ index 0000000..34826ea
 +#define E1S_PMIC_S2MPS27_LDO18_CTRL     0x3DU
 +#define E1S_PMIC_S2MPS27_STATUS1_PWRON  (1U << 0)
 +
-+/* S2MPS28 sub-4 LDO5 controls the UFS VCCQ rail: CTRL enables, OUT1 selects. */
 +#define E1S_PMIC_S2MPS28_4_LDO5_CTRL    0x86U
 +#define E1S_PMIC_S2MPS28_4_LDO5_OUT1    0x87U
 +#define E1S_PMIC_S2MPS28_4_COM_CHIP_ID  0x0EU

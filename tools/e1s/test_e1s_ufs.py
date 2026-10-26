@@ -57,7 +57,6 @@ def main():
     if text.count("diff --git ") != 4:
         raise SystemExit("test_e1s_ufs: expected four changed files")
 
-    # The driver must never put a WRITE(6) or WRITE(10) CDB on the wire.
     for opcode in ("0x0a", "0x2a"):
         if opcode in text:
             raise SystemExit("test_e1s_ufs: unexpected write opcode " + opcode)

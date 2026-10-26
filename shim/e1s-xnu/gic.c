@@ -1,10 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
- * e1s GICv3 pre-initialization before jumping to XNU.
- *
- * Adapted from ios-topaz shim/shim.c test_gic(), which proved that XNU
- * needs the NS distributor enabled and the boot CPU's redistributor awake
- * before start.s configures the interrupt controller itself.
- */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "gic.h"
 
 #define GICD_BASE	0x10200000UL

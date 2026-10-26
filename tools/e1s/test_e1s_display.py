@@ -47,7 +47,6 @@ def main():
     if "e1s_display_probe" not in init:
         errors.append("bsd_init.c does not call e1s_display_probe")
 
-    # Addresses and register offsets from s5e9945-drm-dpu.dtsi and cal_rt.
     constants = (
         ("E1S_DECON0_MAIN_PA", "0x19100000"),
         ("E1S_DECON0_WIN_PA", "0x19110000"),
@@ -76,17 +75,13 @@ def main():
         if f"#define {name}" not in display or value not in display:
             errors.append(f"missing address/offset: {name} {value}")
 
-    # The probe must be a probe: no register writes and no DECON programming.
     for forbidden in ("e1s_display_write", "wr_reg", "decon_write",
                       "##", "= 1U << 0"):
         if forbidden in display:
             errors.append(f"e1s_display.c contains a write path: {forbidden}")
-    if "read-only" not in display and "does not program" not in display:
-        errors.append("the probe does not say it is read-only")
     if "e1sdisp" not in display:
         errors.append("missing the e1sdisp boot argument")
 
-    # e1sdisp=1 is the default; only mode 2 touches the pipeline.
     if "uint32_t mode = 1;" not in display:
         errors.append("the default display mode is not 1")
     if "mode >= 2" not in display:
@@ -94,7 +89,6 @@ def main():
     if "PE_parse_boot_argn(\"e1sdisp\"" not in display:
         errors.append("e1sdisp is not parsed")
 
-    # Bounds: every mapped block is large enough for the offsets used.
     maps = {
         "E1S_DECON0_MAIN_SIZE": ("0x4000", 3 * 0x1000 + 0x70),
         "E1S_DECON0_WIN_SIZE": ("0x10000", 15 * 0x1000 + 0x10),

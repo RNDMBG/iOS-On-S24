@@ -1,18 +1,8 @@
 diff --git a/bsd/dev/e1s_pmic.c b/bsd/dev/e1s_pmic.c
-index 7b0a9c6..0ce34f3 100644
+index 71982c5..2e0b4df 100644
 --- a/bsd/dev/e1s_pmic.c
 +++ b/bsd/dev/e1s_pmic.c
-@@ -23,6 +23,9 @@
-  *   e1spmic=2  enable the touch rails LDO9/LDO18
-  *   e1spmic=3  enable the touch rails and the panel rails LDO10/LDO17
-  *   e1spmic=4  report (but do not change) the UFS rails
-+ *
-+ * The RTC is read in every mode; the kernel calendar is set from it unless
-+ * `e1srtc=0` is given or the stored date is before 2024.
-  */
- #include <kern/clock.h>
- #include <libkern/libkern.h>
-@@ -206,20 +209,89 @@ e1s_pmic_rtc_read(struct e1s_pmic_rtc *rtc)
+@@ -175,20 +175,80 @@ e1s_pmic_rtc_read(struct e1s_pmic_rtc *rtc)
  		}
  	}
  
@@ -23,10 +13,6 @@ index 7b0a9c6..0ce34f3 100644
 -	rtc->day = regs[4];
 -	rtc->month = regs[5];
 -	rtc->year = regs[6];
-+	/*
-+	 * The values are binary, not BCD.  The masks are the ones Samsung's
-+	 * s2m_data_to_tm() uses (drivers/rtc/samsung/pmic/s2mps27_rtc.c).
-+	 */
 +	rtc->second = regs[0] & 0x7F;
 +	rtc->minute = regs[1] & 0x7F;
 +	rtc->hour = regs[2] & 0x1F;
@@ -54,11 +40,6 @@ index 7b0a9c6..0ce34f3 100644
 +	return days[month - 1];
 +}
 +
-+/*
-+ * Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
-+ * civil_from_days, inverted).  Kept in signed 64-bit arithmetic; the RTC can
-+ * only name 2000..2099, so it cannot overflow.
-+ */
 +static int64_t
 +e1s_pmic_days_from_civil(unsigned year, unsigned month, unsigned day)
 +{
@@ -110,7 +91,7 @@ index 7b0a9c6..0ce34f3 100644
  	int error;
  
  	error = e1s_pmic_rtc_read(&rtc);
-@@ -227,9 +299,37 @@ e1s_pmic_print_rtc(void)
+@@ -196,9 +256,31 @@ e1s_pmic_print_rtc(void)
  		printf("e1s-pmic: RTC read failed (%d)\n", error);
  		return;
  	}
@@ -136,12 +117,6 @@ index 7b0a9c6..0ce34f3 100644
 +		return;
 +	}
 +	if (year < 2024) {
-+		/*
-+		 * A PMIC that lost power comes back at 2000-01-01.  Do not
-+		 * hand that to iOS: without a loader epoch the calendar stays
-+		 * at 1970, which is no worse, and a stale 2000 would make
-+		 * every certificate check fail in a more confusing way.
-+		 */
 +		printf("e1s-pmic: RTC is before 2024; calendar left alone\n");
 +		return;
 +	}
@@ -151,7 +126,7 @@ index 7b0a9c6..0ce34f3 100644
  }
  
  void
-@@ -293,7 +393,7 @@ e1s_pmic_init(void)
+@@ -262,7 +344,7 @@ e1s_pmic_init(void)
  		(void)e1s_pmic_report_ufs_rails();
  	}
  
@@ -161,19 +136,12 @@ index 7b0a9c6..0ce34f3 100644
  	    (mode == 2 || mode == 3) ? "enabled" : "disabled");
  }
 diff --git a/bsd/sys/e1s_pmic.h b/bsd/sys/e1s_pmic.h
-index 34826ea..83f680f 100644
+index 280ba51..cfe4c69 100644
 --- a/bsd/sys/e1s_pmic.h
 +++ b/bsd/sys/e1s_pmic.h
-@@ -52,14 +52,20 @@
- #define E1S_PMIC_PANEL_VCI_SEL          0x30U
+@@ -45,13 +45,13 @@
  #define E1S_PMIC_PANEL_VDD3_SEL         0x18U
  
-+/*
-+ * Samsung's S2MPS27 driver stores these as binary values, not BCD:
-+ * second/minute are 7 bits, hour is 5 bits, month is 4 bits, the day is 5
-+ * bits, and year is the 7-bit offset from 2000.  week is a one-hot bit mask
-+ * (bit 0 is Sunday), as Samsung's __fls() conversion expects.
-+ */
  struct e1s_pmic_rtc {
 -	uint8_t year;   /* 00..99, BCD */
 -	uint8_t month;  /* 01..12, BCD */
@@ -192,7 +160,7 @@ index 34826ea..83f680f 100644
  };
  
  /* All of these return 0 on success or an errno. */
-@@ -78,6 +84,7 @@ int e1s_pmic_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
+@@ -70,6 +70,7 @@ int e1s_pmic_update(uint8_t sid, uint8_t type, uint8_t reg, uint8_t value,
      uint8_t mask);
  bool e1s_pmic_power_key(void);
  int e1s_pmic_rtc_read(struct e1s_pmic_rtc *rtc);

@@ -1,8 +1,4 @@
 #!/bin/bash
-# Build an e1s XNU source tree: Apple xnu-8796.121.2 + the pinned HackiOS
-# base + the e1s patch series, in order.
-#
-# usage: xnu/e1s/apply.sh [DIR]
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -12,21 +12,10 @@ index 9cd24b4..f8daa11 100644
  bsd/dev/redwood_goodix.c	standard
 diff --git a/bsd/dev/e1s_input.c b/bsd/dev/e1s_input.c
 new file mode 100644
-index 0000000..2479047
+index 0000000..29638e2
 --- /dev/null
 +++ b/bsd/dev/e1s_input.c
-@@ -0,0 +1,96 @@
-+/*
-+ * e1s hardware input: the volume-up key on the ALIVE GPIO block.
-+ *
-+ * gpa3-0 is at 0x12850064, bit 0.  S-Boot configures it as an input with a
-+ * pull-up, so a pressed key reads as 0.  We only read the DAT register; the
-+ * pin's CON/PUD/DRV registers and the PMIC belong to the firmware.
-+ *
-+ * This file is compiled for every machine config so that the common input
-+ * code can call e1s_input_init() unconditionally.  Only an E1S kernel does
-+ * anything.
-+ */
+@@ -0,0 +1,81 @@
 +#include <kern/clock.h>
 +#include <kern/thread.h>
 +#include <arm/machine_routines.h>
@@ -58,10 +47,6 @@ index 0000000..2479047
 +		thread_terminate(current_thread());
 +	}
 +
-+	/*
-+	 * Start from "released".  A key that is already held is reported after
-+	 * the debounce interval, which is what the old SWEET driver did too.
-+	 */
 +	stable = (*(volatile uint32_t *)(base + E1S_GPA3_DAT) >> E1S_VOLUP_BIT) & 1U;
 +	last = 1U;
 +
