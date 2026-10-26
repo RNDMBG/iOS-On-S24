@@ -126,6 +126,22 @@ def main():
     if got is not None and got[2] != 3:
         errors.append("the ring sequence was not parsed")
 
+    # Full sec_debug_next layout: the loader record at 0x91200000 and a 1 MiB
+    # ring at 0x91300000.  The dump is exactly 2 MiB, so this also checks the
+    # end-of-reservation arithmetic in the parser.
+    ring_blob, text = make_ring(40, data_off=0x100, size=(1 << 20) - 0x100)
+    dump = bytearray(2 << 20)
+    dump[0:8] = b"E1SXNU01"
+    struct.pack_into("<I", dump, 8, 5)
+    dump[16:21] = b"load\n"
+    dump[1 << 20:] = ring_blob
+    got = read_log.extract_xnu(bytes(dump))
+    if got is None or got[1] != text:
+        errors.append("the full 2 MiB sec_debug_next layout did not parse")
+    records = read_log.extract(bytes(dump))
+    if not records or records[0][2] != b"load\n":
+        errors.append("the loader record next to the ring did not parse")
+
     for item in ("0x91300000", "2 MiB", "E1SXNU02", "count=512"):
         if item not in flashing:
             errors.append(f"flashing.md missing: {item}")
