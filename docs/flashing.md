@@ -119,6 +119,28 @@ The verifier must print `ok`. It checks the Samsung boot v4 header, the
 `SEANDROIDENFORCE` footer, the arm64 Image size, the SWEETXNU payload header
 and every segment. Do not flash if it fails.
 
+### Display diagnostic variant (optional)
+
+The default image only prints the framebuffer summary. If the screen stays
+black, make a second image with the read-only DECON/DSIM/RDMA dump:
+
+```sh
+CMDLINE="debug=0x14e cpus=1 keepsyms=1 -v e1sdisp=2"
+python3 tools/e1s/xnu/mkpayload.py \
+  ~/e1s-build/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s \
+  /tmp/e1s.adt /tmp/e1s-display.payload --cmdline "$CMDLINE"
+python3 tools/e1s/append_payload.py --loader shim/e1s-xnu/out/Image \
+  --payload /tmp/e1s-display.payload --output /tmp/e1s-display-Image
+python3 tools/e1s/mkboot.py --kernel /tmp/e1s-display-Image \
+  --output out/e1s-boot-display.img --cmdline "$CMDLINE" --tar
+python3 tools/e1s/verify_boot.py out/e1s-boot-display.img \
+  --tar out/e1s-boot-display.img.tar
+```
+
+This dump is read-only, but a read from a power-gated DPU block can hang the
+interconnect. Use it only after the default image has produced a log or a
+screen, and keep the default image as the fallback.
+
 This build produced:
 
 | File | Size |
