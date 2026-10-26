@@ -5,8 +5,9 @@ This directory is a pinned copy of the XNU changes from
 at commit `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c`.
 
 HackiOS targets **XNU `xnu-8796.121.2` (iOS 16.5, Darwin 22.5.0)**, not the
-XNU release used by the older `xnu/patches/0001-0085` SWEET series. The two
-patch stacks are not interchangeable. The e1s work now starts from this base.
+XNU release used by the older `xnu/legacy-sweet-patches/0001-0085` SWEET
+series. The two patch stacks are not interchangeable. The e1s work now starts
+from this base.
 
 | File | What |
 | --- | --- |
@@ -20,17 +21,17 @@ to every text file, so that Windows checkouts and Linux builds agree):
 `ac3b2b578a6d1d480079557a576bf1bb4155082d4ee2958373c18f5d78b8e89b`
 
 The base is deliberately kept unmodified. Every e1s change belongs in
-`xnu/patches-e1s/` so it can be reviewed, reordered, and re-applied.
+`xnu/e1s/patches/` so it can be reviewed, reordered, and re-applied.
 
 ## Build
 
 HackiOS builds on Linux with stock clang, Theos cctools and the iOS 16.5 SDK.
 It does not need macOS or Xcode. See the HackiOS `xnu/README.md` for the
-toolchain setup. `xnu/apply-e1s.sh` builds the source tree; the kernel build
+toolchain setup. `xnu/e1s/apply.sh` builds the source tree; the kernel build
 itself is done with the HackiOS `xnu-build.sh`/`xnu-deps` tooling:
 
 ```sh
-xnu/apply-e1s.sh ~/e1s-build/xnu-8796.121.2
+xnu/e1s/apply.sh ~/e1s-build/xnu-8796.121.2
 XNU_SRC=~/e1s-build/xnu-8796.121.2 MACHINE=E1S ./xnu-build.sh -j16 -k
 ```
 

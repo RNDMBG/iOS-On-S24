@@ -19,4 +19,4 @@ Makefile text eol=lf
 xnu/hackios/files/** -text
 xnu/hackios/redwood.patch -text
 xnu/hackios/LICENSE -text
-xnu/patches-e1s/*.patch -text
+xnu/e1s/patches/*.patch -text

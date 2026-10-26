@@ -105,7 +105,7 @@ gpio_keys {
   the PMIC; S-Boot owns that configuration.
 - Power and volume-down are not AP GPIO keys. They are PMIC PWRON/input events
   delivered through ACPM. They are out of scope until ACPM/IPC is ported.
-- Implementation: `xnu/patches/0085-e1s-gpio-keys.patch`; host-side checks in
+- Implementation: `xnu/legacy-sweet-patches/0085-e1s-gpio-keys.patch`; host-side checks in
   `tools/e1s/test_e1s_keys.py`. The patch applies, but it is not device-tested.
 
 ## 4. ACPM and PMIC
@@ -256,7 +256,7 @@ SQ head/tail at `+0x00/+0x04`, stop/start at `+0x08` with status at `+0x10`,
 and CQ head/tail at `+0x40/+0x44`. Each further queue is `0x1000` bytes after
 the previous one.
 
-`0005-e1s-ufs.patch` is a polled read-only driver for this host. It handles
+`xnu/e1s/patches/0005-e1s-ufs.patch` is a polled read-only driver for this host. It handles
 both the legacy UTRL list and MCQ queue 0, but it has not been tested on the
 phone. Its first image only prints the register summary at `bsd_init`; it does
 not use `rd=ufsroot0`.
@@ -316,7 +316,7 @@ The flash/torch is a separate S2MPB02 PMIC on hsi2c36 (torch `gpc1-1`); the
 OIS MCU is at `0x1A310000`, with USI05/USI06 at `0x119D0000`/`0x119E0000`.
 Neither is part of the presence probe.
 
-`0006-e1s-camera.patch` is a presence probe only. It does not enable a rail,
+`xnu/e1s/patches/0006-e1s-camera.patch` is a presence probe only. It does not enable a rail,
 start MCLK, program the PHY, or capture a frame. The patch passes its host
 test, but no sensor has been powered or read on the phone yet.
 

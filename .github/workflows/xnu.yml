@@ -6,15 +6,13 @@ on:
     branches: [main, experimental/xnu-e1s]
     paths:
       - "xnu/hackios/**"
-      - "xnu/patches-e1s/**"
-      - "xnu/apply-e1s.sh"
+      - "xnu/e1s/**"
       - "tools/e1s/**"
       - ".github/workflows/xnu.yml"
   pull_request:
     paths:
       - "xnu/hackios/**"
-      - "xnu/patches-e1s/**"
-      - "xnu/apply-e1s.sh"
+      - "xnu/e1s/**"
       - "tools/e1s/**"
 
 concurrency:
@@ -24,9 +22,9 @@ concurrency:
 jobs:
   series:
     # The full kernel build needs clang, Theos cctools and the iPhoneOS16.5
-    # SDK (see xnu/patches-e1s/README.md).  This job verifies the thing that
+    # SDK (see xnu/e1s/README.md).  This job verifies the thing that
     # breaks most often: that the pinned HackiOS base and every e1s patch still
-    # apply to xnu-8796.121.2, plus the host-side ADT/touch checks.
+    # apply to xnu-8796.121.2, plus the host-side ADT/touch/PMIC checks.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,10 +38,11 @@ jobs:
           python3 tools/e1s/test_e1s_keys.py
           python3 tools/e1s/test_e1s_ufs.py
           python3 tools/e1s/test_e1s_camera.py
+          python3 tools/e1s/test_e1s_pmic.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |
-          bash xnu/apply-e1s.sh "$RUNNER_TEMP/xnu-src"
+          bash xnu/e1s/apply.sh "$RUNNER_TEMP/xnu-src"
           test -f "$RUNNER_TEMP/xnu-src/config/MASTER.arm64.e1s"
           test -f "$RUNNER_TEMP/xnu-src/pexpert/pexpert/arm64/E1S.h"
           test -f "$RUNNER_TEMP/xnu-src/bsd/dev/e1s_touch.c"
@@ -55,4 +54,4 @@ jobs:
       - name: Summary
         run: |
           echo "base + patches applied; MACHINE_CONFIG=E1S" >> "$GITHUB_STEP_SUMMARY"
-          echo "No kernel was built in CI; see xnu/patches-e1s/README.md." >> "$GITHUB_STEP_SUMMARY"
+          echo "No kernel was built in CI; see xnu/e1s/README.md." >> "$GITHUB_STEP_SUMMARY"

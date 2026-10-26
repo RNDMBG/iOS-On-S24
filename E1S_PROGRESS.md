@@ -250,10 +250,10 @@ Changes:
   first child, and rewrites the 4-byte `reg` property to the live
   `MPIDR_EL1`. The loader calls it after copying the ADT, before XNU starts,
   and fails closed with `ADT boot CPU MPIDR patch failed`.
-- `xnu/patches/0083-e1s-boot-mpidr.patch` removes the S8 MPIDR/Aff1 topology
+- `xnu/legacy-sweet-patches/0083-e1s-boot-mpidr.patch` removes the S8 MPIDR/Aff1 topology
   restriction, replaces the boot-MPIDR-0 panic with a log line, and rejects
   restarting the boot CPU by topology pointer instead of assuming MPIDR 0.
-- `xnu/patches/0084-e1s-skip-unported-hw.patch` gates the S8
+- `xnu/legacy-sweet-patches/0084-e1s-skip-unported-hw.patch` gates the S8
   `sweet_keys_init`, `sweet_touch_init`, and `sweet_usb_probe` calls behind
   `sweethw=1`. Those drivers still use S8 SPMI/GENI/DWC3 addresses and would
   fault or hang on e1s before the root path is reached.
@@ -291,7 +291,7 @@ corrections:
   The panel is on DSIM0 with reset `gpc7-0`, active-low.
 - Volume-up is `gpa3-0`, `DAT` `0x12850064` bit 0; pressed is assumed low.
 
-Added `xnu/patches/0085-e1s-gpio-keys.patch`:
+Added `xnu/legacy-sweet-patches/0085-e1s-gpio-keys.patch`:
 
 - New `bsd/dev/e1s_keys.c`, added to `bsd/conf/files` after `sweet_usb.c`.
 - Maps ALIVE `0x12850000`, polls `0x12850064` every 20 ms, debounces two
@@ -314,8 +314,8 @@ The target is now the same kernel HackiOS uses, not the old SWEET series:
   the iOS 16.5 / Darwin 22.5.0 kernel.
 - HackiOS changes at `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c`, pinned in
   `xnu/hackios/` (`redwood.patch` + `files/`, APSL 2.0).
-- The old `xnu/patches/0001-0085` series is retained for history but is no
-  longer used by `xnu/apply-e1s.sh`.
+- The old `xnu/legacy-sweet-patches/0001-0085` series is retained for history
+  but is no longer used by `xnu/e1s/apply.sh`.
 
 `xnu/hackios/apply-base.sh` fetches the tag, verifies the base commit, applies
 `redwood.patch`, copies `files/`, and normalizes line endings. A clean tree
@@ -424,7 +424,7 @@ The BOOT image is now checked before it can be flashed:
   the loader's expected screen output, and the restore path.
 
 CI run 5 (`40131171994`) passed: all four host checks and the full
-`xnu/apply-e1s.sh` base + patch application on Ubuntu.
+`xnu/e1s/apply.sh` base + patch application on Ubuntu.
 
 The image has **not** been flashed. The next step needs the phone: back up
 BOOT, verify its hash, flash only BOOT, photograph the loader/XNU screen, and
@@ -542,3 +542,18 @@ segments, the ADT is 16,644 bytes, and the fallback RAM window is
 `0xA0000000+0x20000000`. No camera register has been written on the phone, no
 sensor has been powered, and no image has been flashed. No screen photo and no
 `0x91200000` log exist.
+
+## 2026-10-26 - separate the e1s delta from the HackiOS base
+
+The e1s work is now in one place instead of sharing `xnu/` with the pinned
+base and the historical SWEET series:
+
+- `xnu/e1s/patches/` holds `0001`, `0002`, `0003`, `0005`, and `0006`.
+- `xnu/e1s/apply.sh` applies the pinned HackiOS base and then the series.
+- `xnu/e1s/README.md` documents the series, build, and safety rules.
+- `xnu/hackios/` remains the unmodified pinned base.
+- `xnu/legacy-sweet-patches/` holds the old `0001-0085` series for history.
+
+All path references, CI filters, host checks, and documentation were updated.
+The series still applies cleanly on a fresh `xnu-8796.121.2` tree. No kernel
+was rebuilt or flashed for this move.

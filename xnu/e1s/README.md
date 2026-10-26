@@ -1,7 +1,9 @@
 # e1s patch series (XNU 8796.121.2 / iOS 16.5)
 
-These patches apply on top of the pinned HackiOS base in `xnu/hackios/`, not
-on the old `xnu/patches/0001-0085` SWEET series.
+This directory is the complete e1s delta. The patches in `patches/` apply on
+top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
+`xnu/legacy-sweet-patches/0001-0085` SWEET series. Nothing under
+`xnu/hackios/` is modified by the port.
 
 | Patch | State | What |
 | --- | --- | --- |
@@ -75,7 +77,7 @@ has been written and no sensor has been powered on the phone.
 ```sh
 bash xnu/hackios/apply-base.sh ~/e1s-build/xnu-8796.121.2
 # or, for base + e1s patches:
-bash xnu/apply-e1s.sh ~/e1s-build/xnu-8796.121.2
+bash xnu/e1s/apply.sh ~/e1s-build/xnu-8796.121.2
 
 XNU_SRC=~/e1s-build/xnu-8796.121.2 MACHINE=E1S ./xnu-build.sh -j16 -k
 ```

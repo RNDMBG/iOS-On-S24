@@ -45,9 +45,9 @@ path. The current tree is:
   (`c54f35ca767986246321eb901baf8f5ff7923f6a`), iOS 16.5 / Darwin 22.5.0.
 - HackiOS `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c`, pinned in
   `xnu/hackios/`.
-- e1s patches in `xnu/patches-e1s/`.
+- e1s patches in `xnu/e1s/patches/`.
 
-`xnu/apply-e1s.sh` builds the tree; `MACHINE=E1S` selects the Exynos 2400
+`xnu/e1s/apply.sh` builds the tree; `MACHINE=E1S` selects the Exynos 2400
 board configuration. The kernel links; the only build failure left is the
 known `check_all_exports` symbol-set pass, after `mach.development.e1s` has
 been produced.

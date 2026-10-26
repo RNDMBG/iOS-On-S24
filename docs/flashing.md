@@ -90,7 +90,7 @@ Stop and do not flash if any of these is true:
 The kernel is built from the HackiOS iOS 16.5 base plus the e1s patches:
 
 ```sh
-bash xnu/apply-e1s.sh ~/e1s-build/xnu-8796.121.2
+bash xnu/e1s/apply.sh ~/e1s-build/xnu-8796.121.2
 cd ~/hackios-kernel-linux
 XNU_SRC=~/e1s-build/xnu-8796.121.2 MACHINE=E1S ./xnu-build.sh -j16 -k
 ```

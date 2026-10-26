@@ -10,7 +10,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-PATCH = os.path.join(REPO, "xnu", "patches-e1s", "0003-e1s-touch.patch")
+PATCH = os.path.join(REPO, "xnu", "e1s", "patches", "0003-e1s-touch.patch")
 
 
 def main():

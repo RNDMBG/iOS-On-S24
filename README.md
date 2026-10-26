@@ -94,25 +94,29 @@ builds the real HackiOS base instead of the old SWEET series:
 - `xnu/hackios/`: pinned copy of HackiOS's XNU changes at
   `d82c64a3a31cd27a0a0afbf6e213e467e44b1b4c` (APSL 2.0). `apply-base.sh`
   fetches tag `xnu-8796.121.2` and applies `redwood.patch` plus `files/`.
-- `xnu/apply-e1s.sh`: applies the base, then every patch in
-  `xnu/patches-e1s/` in order.
-- `xnu/patches-e1s/0001-e1s-machine-config.patch`: adds the `E1S` machine
+  This directory is the upstream base and is not edited by the e1s port.
+- `xnu/e1s/`: the complete e1s delta. `apply.sh` applies the base, then every
+  patch in `xnu/e1s/patches/` in order. The series README is
+  `xnu/e1s/README.md`.
+- `xnu/legacy-sweet-patches/`: the old `0001-0085` SWEET series, kept for
+  history only. It is not applied by the e1s build.
+- `xnu/e1s/patches/0001-e1s-machine-config.patch`: adds the `E1S` machine
   configuration, the Exynos 2400 board header (10 CPUs, 4 clusters, ARMv9
   feature set, cache geometry), and the generic-platform guards.
-- `xnu/patches-e1s/0002-e1s-input.patch`: keeps the Qualcomm redwood input /
+- `xnu/e1s/patches/0002-e1s-input.patch`: keeps the Qualcomm redwood input /
   UFS / GPU / Wi-Fi drivers from running on e1s and adds the volume-up key on
   `gpa3-0` (`0x12850064` bit 0).
-- `xnu/patches-e1s/0003-e1s-touch.patch`: the STM controller on SPI9.
+- `xnu/e1s/patches/0003-e1s-touch.patch`: the STM controller on SPI9.
   `gpp9-2/1/0` are clocked by hand as GPIO (the SoC's USI09 pad assignment),
   `gpp9-3` is chip select, and `gpa1-2` is polled as the active-low interrupt.
   The driver speaks Samsung's STM protocol (`0x87` one-event reads, `0x22`
   device ID, `0x23` panel info) and posts to `/dev/redwood-touch`.
-- `xnu/patches-e1s/0005-e1s-ufs.patch`: a polled, read-only UFS 4.0/MCQ block
+- `xnu/e1s/patches/0005-e1s-ufs.patch`: a polled, read-only UFS 4.0/MCQ block
   driver. It takes over the live host S-Boot used (legacy UTRL or MCQ queue 0),
   selects a GPT partition by name and exposes `/dev/ufsroot0`. It is untested;
   the first image only prints its register summary and does not use
   `rd=ufsroot0`.
-- `xnu/patches-e1s/0006-e1s-camera.patch`: an opt-in camera presence probe.
+- `xnu/e1s/patches/0006-e1s-camera.patch`: an opt-in camera presence probe.
   It knows the four sensors (S5KGN3, S5K3LU, S5K3K1, IMX564), their hsi2c
   buses, reset/MCLK pads, and CSIS channels. It bit-bangs the sensor I2C bus
   to read a chip ID and only reads CSIS registers with `e1scam=2`. It does not
@@ -134,7 +138,8 @@ builds the real HackiOS base instead of the old SWEET series:
 - `tools/e1s/fetch_d22ap.py`: download only the iPhone X DeviceTree from an
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
-  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera checks.
+  series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC
+  checks.
   It does not build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
