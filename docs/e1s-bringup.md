@@ -9,7 +9,7 @@ replace assumptions with device evidence.
 ## 0. Status against the old checklist
 
 The old feature list is not an e1s acceptance checklist. The repository now has
-the HackiOS-based e1s series (`0001`-`0008`), but no hardware-validated e1s
+the HackiOS-based e1s series (`0001`-`0010`), but no hardware-validated e1s
 driver and no XNU boot. The table describes the original probe baseline and
 what has replaced it so far.
 
@@ -18,7 +18,7 @@ what has replaced it so far.
 | CPU | 4x Cortex-A53 | 10-core ARMv9 (X4 + A720 + A520) | none; probe prints `MPIDR` |
 | Interrupts | GIC-400 | GICv3, GICD/GICR | reads IDs only; no init |
 | Timer | 26 MHz | 25.6 MHz | prints `CNTFRQ_EL0`; no init |
-| Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB only |
+| Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB; DECON/DSIM state probe, untested (`0010`) |
 | Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
 | Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
 | Cameras | Qualcomm CSI | Exynos CSIS/ISP, 4 sensors | presence probe, untested |
@@ -65,6 +65,7 @@ What is e1s-specific so far:
 | ACPM mailbox, PMIC reads, power key | `0007` | builds, untested |
 | MAX77775 fuel gauge (read-only) | `0008` | builds, untested |
 | S2MPS27 RTC and calendar epoch | `0009` | builds, untested |
+| DECON/DSIM/RDMA framebuffer probe | `0010` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
@@ -494,6 +495,10 @@ reference, not a drop-in.
 ## 6. Open questions
 
 - Does S-Boot really leave a usable 1080x2340 framebuffer at `0xFA200000`?
+- Is RDMA0's `BASEADDR_P0` that same `0xFA200000`, or does the bootloader
+  scan out a different buffer? `e1sdisp=2` prints it (`0010`).
+- Is the DPU/DSIM still powered and streaming when XNU starts, and does the
+  DECON0 version read `0x07030000`? A gated block can hang a register read.
 - What is the exact entry EL, DTB pointer, and load address?
 - Is `CNTFRQ_EL0` zero? If yes, the loader must supply 25.6 MHz.
 - Does the live DTB contain `/memory` and `/reserved-memory` nodes, or only

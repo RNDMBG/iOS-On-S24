@@ -1,0 +1,313 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index f5487bb..c15a50c 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -112,6 +112,7 @@ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/e1s_acpm.c		standard
+ bsd/dev/e1s_battery.c		standard
+ bsd/dev/e1s_camera.c		standard
++bsd/dev/e1s_display.c		standard
+ bsd/dev/e1s_input.c		standard
+ bsd/dev/e1s_pmic.c		standard
+ bsd/dev/e1s_touch.c		standard
+diff --git a/bsd/dev/e1s_display.c b/bsd/dev/e1s_display.c
+new file mode 100644
+index 0000000..fa56625
+--- /dev/null
++++ b/bsd/dev/e1s_display.c
+@@ -0,0 +1,275 @@
++/*
++ * e1s display state (Samsung Galaxy S24, SM-S921B).
++ *
++ * HackiOS's display path is MiniIOMobileFramebuffer on top of the firmware
++ * framebuffer: S-Boot leaves the DECON/DSIM pipeline running and XNU draws
++ * into the buffer it was handed.  This file does not program that pipeline.
++ * It reports what the bootloader left behind, which is what decides whether
++ * the console can be seen at all:
++ *
++ *   - the framebuffer that PE mapped, always printed;
++ *   - with e1sdisp=2, a read-only dump of DECON0..3, the DECON0 windows,
++ *     RDMA0..3, DSIM0/1, the DCPHY0 PLL and DPU_MIPI_PHY_CON.
++ *
++ * The register dump is opt-in because an access to a power-gated DPU block
++ * can hang the interconnect.  This is the same reason the camera probe is
++ * opt-in.  Nothing here writes a register.
++ *
++ * Boot arguments:
++ *   e1sdisp=0   no display report
++ *   e1sdisp=1   framebuffer summary (default)
++ *   e1sdisp=2   ... and the register dump
++ *
++ * Addresses from arch/arm64/boot/dts/exynos/s5e9945-drm-dpu.dtsi and the
++ * register maps in drivers/gpu/drm/samsung/dpu/cal_rt/ of the Samsung tree:
++ *
++ *   DECON0 main    0x19100000   (DECON1..3 at +0x1000)
++ *   DECON0 win     0x19110000   (16 windows, 0x1000 apart)
++ *   DECON0 wincon  0x19130000   (16 windows, 0x1000 apart)
++ *   DPUF0 DMA      0x19900000   (RDMA0..7, 0x1000 apart; EDMA at +0xE000)
++ *   DSIM0          0x190B0000   (DSIM1 at 0x190C0000)
++ *   DCPHY0         0x190E0100   (common block at 0x190E0000)
++ *   disp_ss        0x19021000   (DPU_MIPI_PHY_CON at +0x0008)
++ */
++#if defined(ARM64_BOARD_CONFIG_E1S)
++
++#include <console/video_console.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++
++extern struct vc_info vinfo;
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_DECON0_MAIN_PA      0x19100000UL
++#define E1S_DECON0_MAIN_SIZE    0x4000U
++#define E1S_DECON0_WIN_PA       0x19110000UL
++#define E1S_DECON0_WIN_SIZE     0x10000U
++#define E1S_DECON0_WINCON_PA    0x19130000UL
++#define E1S_DECON0_WINCON_SIZE  0x10000U
++#define E1S_DMA0_PA             0x19900000UL
++#define E1S_DMA0_SIZE           0x8000U
++#define E1S_DSIM0_PA            0x190B0000UL
++#define E1S_DSIM0_SIZE          0x300U
++#define E1S_DSIM1_PA            0x190C0000UL
++#define E1S_DCPHY0_PA           0x190E0100UL
++#define E1S_DCPHY0_SIZE         0x700U
++#define E1S_DISP_SS_PA          0x19021000UL
++#define E1S_DISP_SS_SIZE        0x1000U
++
++/* DECON main block. */
++#define E1S_DECON_VERSION       0x00U
++#define E1S_DECON_FRAME_COUNT   0x04U
++#define E1S_DECON_GLOBAL_CON    0x20U
++#define E1S_DECON_TRIG_CON      0x30U
++#define E1S_DECON_OPMODE        0x40U
++#define E1S_DECON_INT_PEND      0x70U
++
++/* DECON window block. */
++#define E1S_WIN_SECURE_CON      0x00U
++#define E1S_WIN_FUNC_CON_0      0x04U
++#define E1S_WIN_START_POSITION  0x0cU
++#define E1S_WIN_END_POSITION    0x10U
++#define E1S_WINCON_ENABLE       0x00U
++
++/* RDMA / IDMA block. */
++#define E1S_RDMA_ENABLE         0x00U
++#define E1S_RDMA_IN_CTRL_0      0x08U
++#define E1S_RDMA_SRC_WIDTH      0x10U
++#define E1S_RDMA_SRC_HEIGHT     0x14U
++#define E1S_RDMA_IMG_SIZE       0x1cU
++#define E1S_RDMA_BASEADDR_P0    0x40U
++#define E1S_RDMA_SRC_STRIDE_0   0x50U
++
++/* DSIM block. */
++#define E1S_DSIM_VERSION        0x00U
++#define E1S_DSIM_LINK_STATUS0   0x08U
++#define E1S_DSIM_LINK_STATUS1   0x0cU
++#define E1S_DSIM_LINK_STATUS2   0x10U
++#define E1S_DSIM_LINK_STATUS3   0x14U
++#define E1S_DSIM_MIPI_STATUS    0x18U
++#define E1S_DSIM_DPHY_STATUS    0x1cU
++#define E1S_DSIM_CLK_CTRL       0x20U
++#define E1S_DSIM_PHY_PLL_STAT0  0x40U
++#define E1S_DSIM_PHY_MC_GNR0    0x300U
++
++static uint32_t
++e1s_display_read(volatile uint32_t *base, uint32_t offset)
++{
++	return base[offset / 4];
++}
++
++static void
++e1s_display_framebuffer(void)
++{
++	volatile uint32_t *pixels;
++	uint32_t words;
++	uint64_t sum = 0;
++	unsigned i;
++
++	printf("e1s-display: framebuffer %ux%u depth %u stride %u "
++	    "phys %#llx virt %#llx\n", vinfo.v_width, vinfo.v_height,
++	    vinfo.v_depth, vinfo.v_rowbytes,
++	    (unsigned long long)vinfo.v_physaddr,
++	    (unsigned long long)vinfo.v_baseaddr);
++
++	if (vinfo.v_baseaddr == 0 || vinfo.v_depth != 32 ||
++	    vinfo.v_rowbytes == 0 || vinfo.v_height == 0) {
++		printf("e1s-display: the console has no usable framebuffer\n");
++		return;
++	}
++
++	/*
++	 * Read a few words across the buffer without touching every byte: the
++	 * console mapping is write-combining, so reads go to the bus.
++	 */
++	words = (vinfo.v_rowbytes * vinfo.v_height) / 4;
++	pixels = (volatile uint32_t *)vinfo.v_baseaddr;
++	for (i = 0; i < 16; i++) {
++		uint32_t word = pixels[(uint64_t)words * i / 16];
++		if (i < 4) {
++			printf("e1s-display: fb[%u]=%#x%s", i, word,
++			    i == 3 ? "\n" : " ");
++		}
++		sum += word;
++	}
++	printf("e1s-display: framebuffer sample sum %#llx over 16 words\n",
++	    (unsigned long long)sum);
++}
++
++static void
++e1s_display_pipeline(void)
++{
++	volatile uint32_t *decon;
++	volatile uint32_t *win;
++	volatile uint32_t *wincon;
++	volatile uint32_t *dma;
++	volatile uint32_t *dsim;
++	volatile uint32_t *dphy;
++	volatile uint32_t *ss;
++	unsigned i;
++
++	decon = (volatile uint32_t *)ml_io_map(E1S_DECON0_MAIN_PA,
++	    E1S_DECON0_MAIN_SIZE);
++	win = (volatile uint32_t *)ml_io_map(E1S_DECON0_WIN_PA,
++	    E1S_DECON0_WIN_SIZE);
++	wincon = (volatile uint32_t *)ml_io_map(E1S_DECON0_WINCON_PA,
++	    E1S_DECON0_WINCON_SIZE);
++	dma = (volatile uint32_t *)ml_io_map(E1S_DMA0_PA, E1S_DMA0_SIZE);
++	dsim = (volatile uint32_t *)ml_io_map(E1S_DSIM0_PA, E1S_DSIM0_SIZE);
++	dphy = (volatile uint32_t *)ml_io_map(E1S_DCPHY0_PA, E1S_DCPHY0_SIZE);
++	ss = (volatile uint32_t *)ml_io_map(E1S_DISP_SS_PA, E1S_DISP_SS_SIZE);
++
++	if (decon == NULL || win == NULL || wincon == NULL || dma == NULL ||
++	    dsim == NULL || dphy == NULL || ss == NULL) {
++		printf("e1s-display: cannot map the display registers\n");
++		return;
++	}
++
++	for (i = 0; i < 4; i++) {
++		uint32_t base = i * 0x1000U;
++		uint32_t global = e1s_display_read(decon,
++		    base + E1S_DECON_GLOBAL_CON);
++		uint32_t opmode = e1s_display_read(decon,
++		    base + E1S_DECON_OPMODE);
++
++		printf("e1s-display: DECON%u version %#x frames %u "
++		    "global %#x%s%s opmode %#x\n", i,
++		    e1s_display_read(decon, base + E1S_DECON_VERSION),
++		    e1s_display_read(decon, base + E1S_DECON_FRAME_COUNT),
++		    global, (global & (1U << 4)) ? " run" : " idle",
++		    (global & (1U << 5)) ? " idle-status" : "", opmode);
++	}
++
++	for (i = 0; i < 16; i++) {
++		uint32_t base = i * 0x1000U;
++		uint32_t con = e1s_display_read(wincon, base);
++		uint32_t start, end;
++
++		if (i >= 4 && (con & 1U) == 0) {
++			continue;
++		}
++		start = e1s_display_read(win, base + E1S_WIN_START_POSITION);
++		end = e1s_display_read(win, base + E1S_WIN_END_POSITION);
++		printf("e1s-display: DECON0 win%u con %#x%s start %u,%u "
++		    "end %u,%u secure %#x\n", i, con,
++		    (con & 1U) ? " on" : " off", start & 0x3fffU,
++		    (start >> 16) & 0x3fffU, end & 0x3fffU,
++		    (end >> 16) & 0x3fffU,
++		    e1s_display_read(win, base + E1S_WIN_SECURE_CON));
++	}
++
++	for (i = 0; i < 4; i++) {
++		uint32_t base = i * 0x1000U;
++		uint32_t en = e1s_display_read(dma, base + E1S_RDMA_ENABLE);
++		uint32_t ctrl = e1s_display_read(dma, base + E1S_RDMA_IN_CTRL_0);
++
++		printf("e1s-display: RDMA%u enable %#x%s format %u "
++		    "%ux%u stride %u addr %#x\n", i, en,
++		    (en & 1U) ? " on" : " off", (ctrl >> 8) & 0x3fU,
++		    e1s_display_read(dma, base + E1S_RDMA_SRC_WIDTH),
++		    e1s_display_read(dma, base + E1S_RDMA_SRC_HEIGHT),
++		    e1s_display_read(dma, base + E1S_RDMA_SRC_STRIDE_0),
++		    e1s_display_read(dma, base + E1S_RDMA_BASEADDR_P0));
++	}
++
++	for (i = 0; i < 2; i++) {
++		volatile uint32_t *d = dsim;
++		uint32_t link0, link1, link2, link3, mipi, dphy_status, clk;
++
++		if (i == 1) {
++			d = (volatile uint32_t *)ml_io_map(E1S_DSIM1_PA,
++			    E1S_DSIM0_SIZE);
++			if (d == NULL) {
++				printf("e1s-display: cannot map DSIM1\n");
++				continue;
++			}
++		}
++		link0 = e1s_display_read(d, E1S_DSIM_LINK_STATUS0);
++		link1 = e1s_display_read(d, E1S_DSIM_LINK_STATUS1);
++		link2 = e1s_display_read(d, E1S_DSIM_LINK_STATUS2);
++		link3 = e1s_display_read(d, E1S_DSIM_LINK_STATUS3);
++		mipi = e1s_display_read(d, E1S_DSIM_MIPI_STATUS);
++		dphy_status = e1s_display_read(d, E1S_DSIM_DPHY_STATUS);
++		clk = e1s_display_read(d, E1S_DSIM_CLK_CTRL);
++
++		printf("e1s-display: DSIM%u version %#x link %#x %#x %#x "
++		    "%#x mipi %#x dphy %#x clk %#x\n", i,
++		    e1s_display_read(d, E1S_DSIM_VERSION), link0, link1,
++		    link2, link3, mipi, dphy_status, clk);
++		printf("e1s-display: DSIM%u video %u line %u cmdlock %u "
++		    "pll %u stable %u hsclk %u data %u stopclk %u "
++		    "stopdata %#x TE %u\n", i,
++		    (link0 >> 24) & 1U, link0 & 0x1fffU,
++		    (link1 >> 25) & 1U, (link3 >> 12) & 7U, link3 & 1U,
++		    (link2 >> 8) & 7U, (link2 >> 21) & 7U,
++		    (dphy_status >> 8) & 1U, dphy_status & 0xfU,
++		    mipi & 1U);
++	}
++
++	printf("e1s-display: DCPHY0 pll %#x lock %u ready %u enable %u\n",
++	    e1s_display_read(dphy, E1S_DSIM_PHY_PLL_STAT0),
++	    e1s_display_read(dphy, E1S_DSIM_PHY_PLL_STAT0) & 1U,
++	    (e1s_display_read(dphy, E1S_DSIM_PHY_MC_GNR0) >> 1) & 1U,
++	    e1s_display_read(dphy, E1S_DSIM_PHY_MC_GNR0) & 1U);
++	printf("e1s-display: DPU_MIPI_PHY_CON %#x\n",
++	    e1s_display_read(ss, 0x08U));
++}
++
++void
++e1s_display_probe(void)
++{
++	uint32_t mode = 1;
++
++	(void)PE_parse_boot_argn("e1sdisp", &mode, sizeof(mode));
++	if (mode == 0) {
++		return;
++	}
++	e1s_display_framebuffer();
++	if (mode >= 2) {
++		e1s_display_pipeline();
++	}
++}
++
++#endif /* ARM64_BOARD_CONFIG_E1S */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 6e9b811..6900596 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -98,6 +98,7 @@
+ #if defined(E1S)
+ extern void e1s_pmic_init(void);
+ extern void e1s_battery_init(void);
++extern void e1s_display_probe(void);
+ extern void e1s_ufs_probe(void);
+ extern void e1s_camera_probe(void);
+ #endif
+@@ -991,6 +992,7 @@ bsd_init(void)
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
+ #if defined(E1S)
++		e1s_display_probe();            /* framebuffer and, opt-in, DECON/DSIM */
+ 		e1s_pmic_init();                /* ACPM/PMIC probe; power-key source */
+ #endif
+ 		redwood_input_init();           /* /dev/redwood-touch */

@@ -10,12 +10,13 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0001-e1s-machine-config.patch` | builds | `E1S` machine config, Exynos 2400 board header, 10-CPU/4-cluster limits, cache geometry, generic-platform guards |
 | `0002-e1s-input.patch` | builds | gate redwood-only input/UFS/GPU probing; e1s volume-up GPIO key |
 | `0003-e1s-touch.patch` | builds, untested | STM controller on SPI9: bit-banged CLK/MOSI/MISO, CS `gpp9-3`, IRQ `gpa1-2`, `0x87` event reads |
-| `0004-e1s-display.patch` | not needed yet | HackiOS's `MiniIOMobileFramebuffer` already uses `boot_args.video`; the loader supplies it and finds it in the S-Boot DTB |
+| `0004-e1s-display.patch` | reserved | no patch: HackiOS's `MiniIOMobileFramebuffer` already uses `boot_args.video`; the loader supplies it from the S-Boot DTB. The DECON/DSIM probe is `0010` |
 | `0005-e1s-ufs.patch` | builds, untested | S5E9945 UFS 4.0/MCQ read-only root device: HCI `0x17100000`, SQD `0x17140000`, GPT partition lookup, `rd=ufsroot0` |
 | `0006-e1s-camera.patch` | builds, untested | SM-S921B camera presence probe: four sensors, bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture |
 | `0007-e1s-pmic.patch` | builds, untested | AP2APM mailbox, S2MPS27/S2MPS28 register access, PMIC power key, optional touch/panel rails, gate the Qualcomm audio/camera sinks |
 | `0008-e1s-battery.patch` | builds, untested | read-only MAX77775 fuel gauge on `hsi2c_16` (`gpp8-0/1`), reported through HackiOS's `redwood_battery_report()` |
 | `0009-e1s-rtc.patch` | builds, untested | S2MPS27 RTC (binary fields), validated and handed to `clock_set_calendar_microtime()`; `e1srtc=0` disables the clock set |
+| `0010-e1s-display.patch` | builds, untested | framebuffer summary plus an opt-in read-only DECON0..3 / window / RDMA / DSIM0-1 / DCPHY0 dump; `e1sdisp=2` |
 
 ### UFS (0005)
 
@@ -132,6 +133,49 @@ the read and the printed line but does not set the clock.
 The RTC is treated as UTC; timezone handling belongs to userland. The register
 layout and the binary encoding come from Samsung's `s2mps27_rtc.c`, but no
 read has happened on the phone yet.
+
+### Display probe (0010)
+
+`0010-e1s-display.patch` adds `bsd/dev/e1s_display.c`. It does not program
+the panel or the display controller: the console still goes through HackiOS's
+`MiniIOMobileFramebuffer` and the framebuffer the loader wrote into
+`boot_args.video`. What it adds is the state needed to tell whether that path
+is enough:
+
+- Every boot prints the mapped framebuffer's width, height, depth, stride,
+  physical and virtual addresses, a few sample words and their sum.
+- `e1sdisp=1` (the default) keeps it to that summary.
+- `e1sdisp=2` also maps and reads, without writing, the pipeline:
+  DECON0..3 (version, frame count, global and opmode), the 16 DECON0 windows
+  (enable, start/end position, secure bit), RDMA0..3 (enable, format, size,
+  stride, base address), DSIM0 and DSIM1 (link/MIPI/DPHY/clk status), the
+  DCPHY0 PLL and `DPU_MIPI_PHY_CON`. `e1sdisp=0` disables the report.
+
+The register dump is opt-in because a read from a power-gated DPU block can
+hang the interconnect. The addresses come from
+`s5e9945-drm-dpu.dtsi` and the `cal_rt` register headers:
+
+| Block | Address |
+| --- | --- |
+| DECON0 main / win / wincon | `0x19100000` / `0x19110000` / `0x19130000` |
+| DECON1..3 main | `0x19101000`, `0x19102000`, `0x19103000` |
+| DPUF0 DMA (RDMA0..7, EDMA) | `0x19900000` (`+0x1000` per RDMA, EDMA `+0xE000`) |
+| DSIM0 / DSIM1 | `0x190B0000` / `0x190C0000` |
+| DCPHY0 / common | `0x190E0100` / `0x190E0000` |
+| `disp_ss` (`DPU_MIPI_PHY_CON`) | `0x19021000` (`+0x0008`) |
+
+What to read in the dump: DECON0 `version` should be `0x07030000`, `global`
+should show `run` and the frame count should move; window 0 should be enabled
+with the panel's 1080x2340 geometry; RDMA0's base address is the scanout
+buffer. If that address is the loader's `0xFA200000`, the existing console
+path is already visible and only the panel/DSIM needs attention. If it is a
+different buffer, the next patch has to point the live window at the XNU
+framebuffer. DSIM0 should report video mode, a stable DCPHY PLL and an
+unmasked link; anything else means S-Boot powered the panel down before the
+handoff.
+
+The panel reset is `gpc7-0`, active low (`PERIC2 0x11830000`, bank `0x1a0`).
+Nothing drives it yet; it is recorded for the eventual panel power sequence.
 
 ## Build
 

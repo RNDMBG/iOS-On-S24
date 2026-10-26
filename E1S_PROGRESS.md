@@ -655,3 +655,45 @@ The payload layout is unchanged: payload at `0x19000`, entry
 
 Not device-tested: the RTC register read, the binary field encoding, the UTC
 assumption, and the calendar set. No new image has been flashed.
+
+## 2026-10-26 - Display state probe
+
+`0010-e1s-display.patch` adds `bsd/dev/e1s_display.c`. It does not program
+DECON or DSIM; the console remains HackiOS's `MiniIOMobileFramebuffer` writing
+into the framebuffer the loader found in the S-Boot DTB. The new probe reports
+the state that decides whether that is enough:
+
+- Always: the mapped framebuffer's width, height, depth, stride, physical and
+  virtual addresses, sample words and their sum.
+- `e1sdisp=2`: a read-only dump of DECON0..3 (`VERSION`, `FRAME_COUNT`,
+  `GLOBAL_CON`, `OPMODE`, `INT_PEND`), the 16 DECON0 windows, RDMA0..3
+  (enable, format, size, stride, `BASEADDR_P0`), DSIM0/1 (link, MIPI, DPHY and
+  clock status), the DCPHY0 PLL and `DPU_MIPI_PHY_CON`.
+- `e1sdisp=0` disables the report. The default is 1: the framebuffer summary
+  only, because a read from a power-gated DPU block can hang the interconnect.
+
+The DECON0 window is expected to show 1080x2340 and RDMA0's `BASEADDR_P0` is
+the decisive value: `0xFA200000` means the console buffer is the live scanout
+buffer. The DECON0 version should read `0x07030000`; DSIM0 should report video
+mode, a stable DCPHY PLL and an unmasked link.
+
+Build result: `mach.development.e1s` links at 16,227,856 bytes. The build still
+stops only in the known `check_all_exports` pass. The full series applies on a
+fresh `xnu-8796.121.2` tree, and `tools/e1s/test_e1s_display.py` passes with
+the other nine host checks.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,227,856 | `0e3a574dfbf52d924e0ab3ba5c8fd5e3c51ab0d5e7ef3b8e97dbc730f4012250` |
+| `out/e1s-boot-touch.img` | 16,355,344 | `4b46741fc808f987cdf4f1d6a8a85380e163e1a4322cea28543a174dfa822c8c` |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 | `00eedd1399236c079216b695c913d82a0dfa459b80f37c5332f5334713c9278d` |
+
+The payload layout is unchanged: payload at `0x19000`, entry
+`0xfffffff0074224a8`, 10 segments, ADT 16,644 bytes, fallback RAM
+`0xA0000000+0x20000000`. The command line still has no `e1sdisp`, so the
+first boot prints the summary and does not read the display controller.
+
+Not device-tested: every DECON/DSIM/RDMA read and the assumption that the DPU
+is still powered at handoff. No new image has been flashed.

@@ -36,6 +36,59 @@ DTS revision may differ on the user's firmware.
 The older 1440x3088 `s6e3hae` / ERD panel definition does not describe the
 retail SM-S921B.
 
+### 1.1 Display pipeline
+
+The retail board uses DECON0 and DSIM0; the DTS marks DSIM1 disabled. XNU does
+not program either one yet: HackiOS's `MiniIOMobileFramebuffer` draws into the
+buffer the loader found in the S-Boot DTB, and `0010-e1s-display.patch` only
+reads the live state.
+
+| Block | Address | Size | Source |
+| --- | --- | --- | --- |
+| DECON0 main | `0x19100000` | `0xFFFF` | DTS `drmdecon@19100000` |
+| DECON0 window | `0x19110000` | `0xFFFF` | DTS, same node |
+| DECON0 sub (DSC/DSIMIF) | `0x19120000` | `0xFFFF` | DTS, same node |
+| DECON0 wincon | `0x19130000` | `0xFFFF` | DTS, same node |
+| DECON0 DQE | `0x19170000` | `0xFFFF` | DTS, same node |
+| DECON1..3 main | `0x19101000`..`0x19103000` | `0x1000` each | DTS / `DECON_OFFSET` |
+| DPUF0 DMA (RDMA0..7) | `0x19900000` | `0x8000` | Driver `regs-dpp.h` |
+| DPUF0 EDMA | `0x1990E000` | `0x1000` | DTS `edma` / `regs-dpp.h` |
+| DSIM0 | `0x190B0000` | `0x300` | DTS `drmdsim@190B0000` |
+| DSIM1 | `0x190C0000` | `0x300` | DTS, `status = "disabled"` |
+| DCPHY0 top | `0x190E0100` | `0x700` | DTS `dphy` region |
+| DCPHY0 common | `0x190E0000` | `0x100` | DTS `dphy-extra` region |
+| `disp_ss` / `DPU_MIPI_PHY_CON` | `0x19021000` / `+0x0008` | `0x10` | DTS `disp_ss` / `regs-dsim.h` |
+
+Useful offsets, from `drivers/gpu/drm/samsung/dpu/cal_rt/`:
+
+- DECON main: `VERSION 0x00`, `FRAME_COUNT 0x04`, `GLOBAL_CON 0x20`,
+  `TRIG_CON 0x30`, `OPMODE_OPTION 0x40`, `INT_PEND 0x70`. `GLOBAL_CON` bit 4
+  is run status, bit 5 is idle status.
+- DECON window (16 windows, `0x1000` apart): `SECURE_CON 0x00`,
+  `FUNC_CON_0 0x04`, `START_POSITION 0x0C`, `END_POSITION 0x10`. X is bits
+  `[13:0]`, Y is `[29:16]`.
+- DECON wincon (`0x1000` apart): bit 0 enables the window.
+- RDMA (`0x1000` apart): `ENABLE 0x00`, `IN_CTRL_0 0x08` (format in
+  `[13:8]`), `SRC_WIDTH 0x10`, `SRC_HEIGHT 0x14`, `IMG_SIZE 0x1C`,
+  `BASEADDR_P0 0x40`, `SRC_STRIDE_0 0x50`.
+- DSIM: `VERSION 0x00`, `LINK_STATUS0..3 0x08..0x14`, `MIPI_STATUS 0x18`,
+  `DPHY_STATUS 0x1C`, `CLK_CTRL 0x20`. `LINK_STATUS0` bit 24 is video mode
+  and bits `[12:0]` count lines; `LINK_STATUS3` bits `[14:12]` are the PLL
+  sleep state and bit 0 is PLL stable; `MIPI_STATUS` bit 29 is frame
+  processing and bit 24 is shadow update done.
+- DCPHY: `PLL_CON0 0x00`, `PLL_STAT0 0x40` (bit 0 is lock),
+  `MC_GNR_CON0 0x300` (bit 1 PHY ready, bit 0 enable).
+
+The panel reset is `gpc7-0`, active low (`PERIC2 0x11830000`, bank `0x1a0`,
+so `CON 0x118301A0` and `DAT 0x118301A4` bit 0). It is recorded but not driven
+yet.
+
+`e1sdisp=2` dumps these registers read-only at `bsd_init`. The decisive value
+is RDMA0's `BASEADDR_P0`: if it is the loader's `0xFA200000`, the console is
+already in the live scanout buffer and only the panel/DSIM path can be wrong.
+The DECON0 version should read `0x07030000`. A read from a gated block can
+hang the interconnect, which is why the dump is not the default.
+
 ## 2. GPIO controllers
 
 The S5E9945 pinctrl driver lists these controller bases. The `DAT` register is

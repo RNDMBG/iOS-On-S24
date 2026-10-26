@@ -130,16 +130,19 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `237a9053a26ba7147965d31b770619f2d3a125205cfd82c7cd8e1b02a76c03aa`
+  `0e3a574dfbf52d924e0ab3ba5c8fd5e3c51ab0d5e7ef3b8e97dbc730f4012250`
 - `e1s-boot-touch.img`:
-  `611bdf41e1b4086c328b905099d3266a260ab1bed61d9c5852fcc2da0984d94d`
+  `4b46741fc808f987cdf4f1d6a8a85380e163e1a4322cea28543a174dfa822c8c`
 - `e1s-boot-touch.img.tar`:
-  `e1ac3ddfa266c56de19421471fbf16db884be9b85ff337eae4c5d46a07d1380f`
+  `00eedd1399236c079216b695c913d82a0dfa459b80f37c5332f5334713c9278d`
 
-The kernel payload at `0x19000` now includes `0007` (ACPM/PMIC) and `0008`
-(MAX77775 battery). The command line has no `e1spmic`, `e1sbattery`, `e1scam`
-or `rd=ufsroot0` argument, so the image uses the defaults: PMIC reads only
-(mode 1), battery reads only, no camera probe, no UFS root.
+The kernel payload at `0x19000` now includes `0007` (ACPM/PMIC), `0008`
+(MAX77775 battery), `0009` (RTC calendar) and `0010` (display state). The
+command line has no `e1spmic`, `e1sbattery`, `e1srtc`, `e1sdisp`, `e1scam` or
+`rd=ufsroot0` argument, so the image uses the defaults: PMIC reads only
+(mode 1), battery reads only, RTC sets the calendar, the display report prints
+the framebuffer summary, no camera probe, no UFS root. Add `e1sdisp=2` only
+for a diagnostic boot that may read the DECON/DSIM block.
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with

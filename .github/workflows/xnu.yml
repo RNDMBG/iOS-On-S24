@@ -24,8 +24,8 @@ jobs:
     # The full kernel build needs clang, Theos cctools and the iPhoneOS16.5
     # SDK (see xnu/e1s/README.md).  This job verifies the thing that
     # breaks most often: that the pinned HackiOS base and every e1s patch still
-    # apply to xnu-8796.121.2, plus the host-side ADT/touch/PMIC/battery/RTC
-    # checks.
+    # apply to xnu-8796.121.2, plus the host-side
+    # ADT/touch/PMIC/battery/RTC/display checks.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -42,6 +42,7 @@ jobs:
           python3 tools/e1s/test_e1s_pmic.py
           python3 tools/e1s/test_e1s_battery.py
           python3 tools/e1s/test_e1s_rtc.py
+          python3 tools/e1s/test_e1s_display.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |
