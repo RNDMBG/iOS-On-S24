@@ -22,7 +22,7 @@ what has replaced it so far.
 | Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
 | Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
 | Cameras | Qualcomm CSI | Exynos CSIS/ISP, 4 sensors | presence probe, untested |
-| RTC | S2MPS17 | S2MPS27/28 PMIC set | S2MPS27 RTC read, untested (`0007`) |
+| RTC | S2MPS17 | S2MPS27/28 PMIC set | S2MPS27 RTC read + calendar epoch, untested (`0007`/`0009`) |
 | Buttons | Bixby key | no Bixby; volume-up, PMIC power key | `e1s_input.c`, untested |
 | Battery | older fuel gauge | MAX77775 | read-only monitor, untested (`0008`) |
 | USB | older USB | e1s USB | none |
@@ -64,6 +64,7 @@ What is e1s-specific so far:
 | Camera presence probe | `0006` | builds, untested |
 | ACPM mailbox, PMIC reads, power key | `0007` | builds, untested |
 | MAX77775 fuel gauge (read-only) | `0008` | builds, untested |
+| S2MPS27 RTC and calendar epoch | `0009` | builds, untested |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
@@ -313,6 +314,13 @@ pixels.
   voltage selector; it supplies UFS VCCQ.
 - The power key is the S2MPS27 `PWRON` status bit (`STATUS1 0x0a`, bit 0),
   not an AP GPIO. XNU polls it because the PMIC IRQ is not routed yet.
+- The RTC registers `0x04`..`0x0a` are binary, not BCD. `SEC`/`MIN` are 7
+  bits, `HOUR` is 5 bits (the PM flag is bit 6), `DATE` is 5 bits, `MONTH` is
+  4 bits, `WEEKDAY` is one-hot, and `YEAR` is the 7-bit offset from 2000.
+  `0009` validates the fields, rejects a date before 2024, and calls
+  `clock_set_calendar_microtime()` to set both the BSD calendar and HackiOS's
+  platform epoch. It does not write the RTC update register, so the PMIC path
+  stays read-only.
 
 The mailbox is only a transport. The channels, queue lengths and buffer
 addresses are the ones the APM firmware published at boot; the driver checks
@@ -507,6 +515,9 @@ reference, not a drop-in.
 - Does the MAX77775 answer on `gpp8-0`/`gpp8-1` in the DTS order, and is the
   bus powered across the handoff? A missing ACK is a printed line, not a
   panic.
+- Does the S2MPS27 RTC hold UTC or local time, and is it still running after
+  the bootloader hands over? `0009` validates the fields before using them; a
+  wrong timezone shifts the clock but does not crash the boot.
 - Does the S2MPS27 `PWRON` status bit reflect the key's current state, or does
   it latch until the PMIC interrupt is cleared? The power-key path is polled
   and untested.

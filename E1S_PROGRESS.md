@@ -615,3 +615,43 @@ descriptor layout is compiled from Samsung's `struct ipc_channel` and
 `struct channel_info`; if the firmware revision differs, `e1s-acpm` prints the
 channel dump and falls back without touching the PMIC. No new image has been
 flashed.
+
+## 2026-10-26 - RTC and the calendar epoch
+
+`0009-e1s-rtc.patch` completes the PMIC RTC path:
+
+- `e1s_pmic_rtc_read()` now masks the S2MPS27 fields as binary values, the way
+  Samsung's `s2mps27_rtc.c` does. The previous code printed the raw bytes with
+  `%02x` and called them BCD, so a stored 23:34:59 would have been reported as
+  `17:22:3b`.
+- `e1s_pmic_rtc_epoch()` validates the date (including leap years) and converts
+  it to a Unix epoch.
+- `e1s_pmic_rtc_init()` prints the decoded UTC time and calls
+  `clock_set_calendar_microtime()`. That updates both the BSD wall clock and
+  HackiOS's `GenericARMPE` boot epoch, so `getGMTTimeOfDay()` no longer starts
+  at 1970.
+- A date before 2024 is rejected: a PMIC that lost power resets to 2000, and
+  handing that to iOS would make certificate checks fail confusingly.
+  `e1srtc=0` keeps the read and the printed line but leaves the calendar alone.
+- The driver still does not write `RTC_UPDATE`; the PMIC path remains
+  read-only.
+
+Build result: `mach.development.e1s` links at 16,227,864 bytes. The build still
+stops only in the known `check_all_exports` pass. The full series applies on a
+fresh `xnu-8796.121.2` tree, and `tools/e1s/test_e1s_rtc.py` passes together
+with the other eight host checks.
+
+Regenerated (not flashed):
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,227,864 | `237a9053a26ba7147965d31b770619f2d3a125205cfd82c7cd8e1b02a76c03aa` |
+| `out/e1s-boot-touch.img` | 16,355,344 | `611bdf41e1b4086c328b905099d3266a260ab1bed61d9c5852fcc2da0984d94d` |
+| `out/e1s-boot-touch.img.tar` | 16,363,520 | `e1ac3ddfa266c56de19421471fbf16db884be9b85ff337eae4c5d46a07d1380f` |
+
+The payload layout is unchanged: payload at `0x19000`, entry
+`0xfffffff0074224a8`, 10 segments, ADT 16,644 bytes, fallback RAM
+`0xA0000000+0x20000000`.
+
+Not device-tested: the RTC register read, the binary field encoding, the UTC
+assumption, and the calendar set. No new image has been flashed.

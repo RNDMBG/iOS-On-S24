@@ -132,6 +132,9 @@ builds the real HackiOS base instead of the old SWEET series:
   monitor on `hsi2c_16` (`gpp8-0/1`). It reports state of charge, voltage,
   current, temperature and capacity through HackiOS's
   `redwood_battery_report()`; it never writes the charger or gauge.
+- `xnu/e1s/patches/0009-e1s-rtc.patch`: decodes the S2MPS27 RTC as binary
+  fields, validates the date, and sets the BSD calendar and HackiOS's platform
+  epoch. `e1srtc=0` disables the clock set; a pre-2024 RTC is left alone.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -150,7 +153,7 @@ builds the real HackiOS base instead of the old SWEET series:
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
   series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
-  battery checks. It does not build the kernel.
+  battery/RTC checks. It does not build the kernel.
 
 The E1S kernel links as a 16 MB `mach.development.e1s` and the loader packs a
 16 MB BOOT image. Nothing has been flashed or booted. The RAM base/size,

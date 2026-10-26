@@ -144,9 +144,31 @@ in `OUT1` and the enable bits in `CTRL`.
 The board PMIC nodes use ACPM MFD channel 2. The AP2APM mailbox is at
 `0x12B90000`; the S-Boot-created channel table is in the APM SRAM at
 `0x02055000 + 0x9D00`. XNU reuses that table rather than reinitializing the
-APM firmware. `xnu/e1s/patches/0007-e1s-pmic.patch` reads the S2MPS27 chip ID,
-status and RTC, can enable the touch/panel rails with `e1spmic=2`/`3`, and adds
-the PMIC power key to the input queue.
+APM firmware. `xnu/e1s/patches/0007-e1s-pmic.patch` reads the S2MPS27 chip ID
+and status, can enable the touch/panel rails with `e1spmic=2`/`3`, and adds the
+PMIC power key to the input queue.
+
+### S2MPS27 RTC
+
+The RTC is the S2MPS27 MFD type `0x04`. Samsung's `s2mps27_rtc.c` stores the
+fields as **binary** values, not BCD:
+
+| Register | Offset | Field |
+| --- | --- | --- |
+| `RTC_SEC` | `0x04` | seconds, 7 bits, 0..59 |
+| `RTC_MIN` | `0x05` | minutes, 7 bits, 0..59 |
+| `RTC_HOUR` | `0x06` | hours, 5 bits, 0..23; bit 6 is the PM flag |
+| `RTC_WEEKDAY` | `0x07` | one-hot weekday mask, Sunday is bit 0 |
+| `RTC_DATE` | `0x08` | day, 5 bits, 1..31 |
+| `RTC_MONTH` | `0x09` | month, 4 bits, 1..12 |
+| `RTC_YEAR` | `0x0A` | years since 2000, 7 bits, 0..99 |
+
+`RTC_UPDATE` is `0x02`; Samsung writes it before a read to latch a coherent
+snapshot. `0009` does not write it: the driver reads the seven registers
+directly and validates the result, keeping the PMIC path read-only. The RTC is
+treated as UTC. `0009-e1s-rtc.patch` converts a valid value to a Unix epoch and
+calls `clock_set_calendar_microtime()`, which also updates HackiOS's platform
+epoch. Dates before 2024 are rejected. `e1srtc=0` leaves the calendar alone.
 
 Do not hardcode S8 PM6150/PM6150L SPMI addresses. e1s PMIC traffic goes through
 ACPM channel 2; `0007` reuses the mailbox and the channel table that S-Boot

@@ -15,6 +15,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0006-e1s-camera.patch` | builds, untested | SM-S921B camera presence probe: four sensors, bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture |
 | `0007-e1s-pmic.patch` | builds, untested | AP2APM mailbox, S2MPS27/S2MPS28 register access, PMIC power key, optional touch/panel rails, gate the Qualcomm audio/camera sinks |
 | `0008-e1s-battery.patch` | builds, untested | read-only MAX77775 fuel gauge on `hsi2c_16` (`gpp8-0/1`), reported through HackiOS's `redwood_battery_report()` |
+| `0009-e1s-rtc.patch` | builds, untested | S2MPS27 RTC (binary fields), validated and handed to `clock_set_calendar_microtime()`; `e1srtc=0` disables the clock set |
 
 ### UFS (0005)
 
@@ -111,6 +112,26 @@ the charger `0x69`; the bus is bit-banged on `gpp8-0` (SCL) and `gpp8-1`
 
 The first image can leave the battery monitor on: it is read-only and its
 failure is a printed line, not a panic.
+
+### RTC and calendar (0009)
+
+`0009-e1s-rtc.patch` completes the S2MPS27 RTC path in `bsd/dev/e1s_pmic.c`.
+Samsung's driver stores the fields as binary values, not BCD: seconds and
+minutes are 7 bits, the hour is 5 bits, the month is 4 bits, the day is 5 bits,
+and the year is the 7-bit offset from 2000. `0007` printed those raw bytes with
+`%02x` and called them BCD, which produced misleading values.
+
+The new `e1s_pmic_rtc_epoch()` validates the calendar (including leap years),
+converts it to a Unix epoch, and `e1s_pmic_rtc_init()` calls
+`clock_set_calendar_microtime()`. That updates both the BSD wall clock and the
+platform expert's boot epoch, so HackiOS's `getGMTTimeOfDay()` starts from the
+PMIC clock instead of 1970. A date before 2024 (a PMIC that lost power and
+reset to 2000) is rejected and the calendar is left alone. `e1srtc=0` keeps
+the read and the printed line but does not set the clock.
+
+The RTC is treated as UTC; timezone handling belongs to userland. The register
+layout and the binary encoding come from Samsung's `s2mps27_rtc.c`, but no
+read has happened on the phone yet.
 
 ## Build
 

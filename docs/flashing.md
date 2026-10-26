@@ -130,11 +130,11 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `c43bb43bfcf73ccb2eb1ff286f9ab3aba407768d5b83ce740731933c05f29c36`
+  `237a9053a26ba7147965d31b770619f2d3a125205cfd82c7cd8e1b02a76c03aa`
 - `e1s-boot-touch.img`:
-  `9b766da556ec34af5c56cf957b2ad80ac53500c2dd51a2af22b1502b1ed5b9d7`
+  `611bdf41e1b4086c328b905099d3266a260ab1bed61d9c5852fcc2da0984d94d`
 - `e1s-boot-touch.img.tar`:
-  `fa99c268d6f2a50146d64bceacc0843a09ba6b9f44ad0732cf0b7d87533a4b2e`
+  `e1ac3ddfa266c56de19421471fbf16db884be9b85ff337eae4c5d46a07d1380f`
 
 The kernel payload at `0x19000` now includes `0007` (ACPM/PMIC) and `0008`
 (MAX77775 battery). The command line has no `e1spmic`, `e1sbattery`, `e1scam`
