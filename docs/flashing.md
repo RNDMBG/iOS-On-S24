@@ -210,7 +210,7 @@ The loader clears the screen and draws a 1080x2340 boot screen: `Galaxy S24`,
 (S-Boot, EL1, GIC, framebuffer, RAM window, payload, ADT, entry), the XNU
 command line, a kernel-load progress bar, the boot-stage checklist, and a
 colour bar at the bottom. `e1s.hold=5` keeps the finished screen up for five
-seconds before `JUMP TO XNU`. The same values are written to the
+seconds before `JUMP TO XNU`. The live handoff values are also written to the
 `0x91200000` log.
 
 After the jump, XNU should print its early console and then `bsd_init` calls
