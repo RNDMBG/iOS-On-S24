@@ -22,6 +22,7 @@ FOOTER = b"SEANDROIDENFORCE"
 ARM64_MAGIC = b"ARM\x64"
 PAYLOAD_MAGIC = b"SWEETXNU"
 MAX_PAYLOAD = 64 * 1024 * 1024
+BOOT_PARTITION_SIZE = 64 * 1024 * 1024
 
 
 def fail(text):
@@ -31,6 +32,8 @@ def fail(text):
 def check_boot(data):
     if len(data) < PAGE + 64:
         fail("file is too small")
+    if len(data) > BOOT_PARTITION_SIZE:
+        fail(f"image is {len(data)} bytes, partition is {BOOT_PARTITION_SIZE}")
     if data[:8] != MAGIC:
         fail("missing ANDROID! magic")
     kernel_size, = struct.unpack_from("<I", data, 8)
@@ -132,6 +135,8 @@ def main():
         check_tar(args.tar, data)
     print(f"{args.image}: ok")
     print(f"  size {len(data)} bytes, sha256 {hashlib.sha256(data).hexdigest()}")
+    print(f"  partition {BOOT_PARTITION_SIZE} bytes, "
+          f"headroom {BOOT_PARTITION_SIZE - len(data)} bytes")
     print(f"  os_version 0x{os_version:08x}, kernel {len(kernel)} bytes at 4096")
     print(f"  arm64 text_offset 0x{info['text_offset']:x}, payload at 0x{info['payload_offset']:x}")
     print(f"  entry 0x{info['entry']:x}, {info['segments']} segments, "

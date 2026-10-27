@@ -7,12 +7,14 @@ on:
     paths:
       - "xnu/hackios/**"
       - "xnu/e1s/**"
+      - "shim/e1s-xnu/**"
       - "tools/e1s/**"
       - ".github/workflows/xnu.yml"
   pull_request:
     paths:
       - "xnu/hackios/**"
       - "xnu/e1s/**"
+      - "shim/e1s-xnu/**"
       - "tools/e1s/**"
 
 concurrency:
@@ -41,6 +43,7 @@ jobs:
           python3 tools/e1s/test_e1s_log.py
           python3 tools/e1s/test_e1s_port_map.py
           python3 tools/e1s/test_e1s_smp.py
+          python3 tools/e1s/test_e1s_ui.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |

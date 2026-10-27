@@ -151,7 +151,9 @@ builds the real HackiOS base instead of the old SWEET series:
   distributor/redistributor, handles EL2 entry, writes the live boot-CPU
   MPIDR and the chosen `dram-base`/`dram-size`/`pram` into the ADT, finds the
   S-Boot framebuffer through the DTB (falling back to `0xFA200000`), and
-  refuses a payload that overlaps the RAM window before zeroing it.
+  refuses a payload that overlaps the RAM window before zeroing it. It draws
+  a 1080x2340 device/handoff screen with a kernel-load progress bar and a
+  colour test; `ui.c` is shared with the host preview.
 - `tools/e1s/xnu/mkadt.py`: e1s ADT with the GICv3/timer nodes, the real D22AP
   `/product` tree, and the pieces HackiOS's kernel needs from iBoot: a valid
   CHRP NVRAM image, `/options`, `/pram`, `/defaults/kern.vm_compressor`, and
@@ -162,7 +164,8 @@ builds the real HackiOS base instead of the old SWEET series:
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
   series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
-  battery/RTC/display/log/port-map/SMP checks. It does not build the kernel.
+  battery/RTC/display/log/port-map/SMP/UI checks. It does not build the
+  kernel.
 
 The driver-by-driver disposition of the HackiOS `redwood_*` tree (kept,
 gated, replaced, not applicable, or still missing) is in
@@ -221,6 +224,28 @@ Current builds:
 | `Image` | 96,832 | `3d4d91b314246a842a603939f054f63c7fd753d2f671304b42d942895f4c0cf2` |
 | `boot.img` | 102,416 | `4550bffb6b2430c1072ed75a65b6282c002797c7adbe1c4a1bc865929dc91952` |
 | `boot.img.tar` | 112,640 | `c0eb50ad16df7e5a92dcc64a9ab8a9a61d754fb8e5a3f445daa3830464b74303` |
+
+### XNU handoff image
+
+The XNU loader draws a 1080x2340 boot screen from `shim/e1s-xnu/ui.c`:
+the SM-S921B device panel, the live handoff values, the kernel command line,
+a load progress bar, the boot-stage checklist, and a colour bar. The
+`e1s.hold=5` test token keeps the finished screen up for five seconds; the
+loader removes it before passing the command line to XNU.
+
+The current image is 16,388,112 bytes against the 64 MiB BOOT partition. It is
+not padded to the partition: S-Boot uses the v4 header's `kernel_size`. The XNU
+kernel and ADT bytes are unchanged from the previous image; only the loader
+screen and the test token changed. The flash procedure is in
+[docs/flashing.md](docs/flashing.md).
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-xnu/out/Image` | 118,784 | `8fb64331ad6788015f77fa44452290087c7fcdaa6076eec915c1e01731ffc3ea` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `b4aced0e7374027f6252fcf93444f4199ba9c7647517981fc36adb68a9d469b9` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `8d1902340f2a93ce464084c7e4c677e0da94e902d716ac747d41c4d8cc8de7e0` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `1f4a21b90ba7f6d1532cf7e7b2eb599d4494f83a8b35c93c30b75f2371c52d2c` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `f074e11ac0b8f86aca9a8ebb799c66c87a156048da7913735158eba6d65ea820` |
 
 ## Building
 
@@ -326,7 +351,8 @@ The exact commands and the cases where you should stop are in
 shim/e1s/          Probe source and build scripts
 shim/e1s-xnu/      Experimental XNU loader (GIC prep, payload, boot args)
 tools/e1s/         Boot image packer, ADT/payload builders, QEMU runner,
-                   topaz-derived iOS-root/userland tools
+                   boot-screen preview/test, topaz-derived iOS-root/userland
+                   tools
 docs/              Bring-up notes and the flash/test procedure
 AGENTS.md          Notes for anyone continuing the work
 E1S_PROGRESS.md    Build history and device notes

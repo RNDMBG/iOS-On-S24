@@ -392,6 +392,33 @@ Not yet measured on e1s. The older port's evidence is only a reference:
 The probe prints `CurrentEL`, `SCTLR_EL1`, `CNTFRQ_EL0`, `MPIDR_EL1`, and
 `x0` so the e1s values can replace these assumptions.
 
+### XNU loader boot screen
+
+The XNU loader draws its own 1080x2340 screen before it copies the payload.
+The layout is in `shim/e1s-xnu/ui.c`; `tools/e1s/ui_preview.c` renders the
+same code on the host for inspection. It is not the QEMU probe screen.
+
+- header: `Galaxy S24`, `SM-S921B / e1s / Exynos 2400`, XNU version
+- device panel: SM-S921B, Exynos 2400 (S5E9945), 10-core, Xclipse 940,
+  8 GiB LPDDR5X, UFS 4.0, 1080x2340 120 Hz, XNU 8796.121.2
+- live handoff: S-Boot accepted, EL1, GICv3, framebuffer, RAM window,
+  payload, ADT, entry
+- kernel image: virtual base, physical load, XNU command line
+- kernel load: progress bar and phase text
+- boot sequence: the nine loader stages
+- colour test: eight bars and a 16-step grey ramp at the bottom
+
+The device specs are static facts for SM-S921B; the handoff values are read at
+runtime. `e1s.hold=N` in the payload command line keeps the finished screen up
+for N seconds (maximum 30) before the jump, and the loader removes that token
+from the `boot_args` command line. The colour bar is the framebuffer format
+test: a red/blue swap means the channel order is not XRGB8888.
+
+The image is not padded to the 64 MiB BOOT partition. The v4 header carries
+`kernel_size`; the current image is 16,388,112 bytes. It is a new loader plus
+the XNU payload, not a patched copy of the stock `boot.img`. The screen has not
+yet been observed on the phone.
+
 ## 3. Probe design
 
 `shim/e1s/` builds a freestanding AArch64 Image with a standard arm64 Image

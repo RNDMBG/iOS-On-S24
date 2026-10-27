@@ -820,3 +820,46 @@ map. QEMU `virt` only runs the freestanding probe, not the XNU kernel.
 
 All thirteen host checks and the QEMU nographic smoke test pass. No phone test,
 no flash, and no claim that the XNU drivers work.
+
+## 2026-10-27 - XNU loader boot screen
+
+The XNU loader now draws a 1080x2340 portrait screen before it copies the
+payload. `shim/e1s-xnu/ui.c` holds the layout; `loader.c` feeds it the live
+handoff values. The screen has the SM-S921B device panel (Exynos 2400, 10-core,
+Xclipse 940, 8 GiB LPDDR5X, UFS 4.0, 1080x2340 120 Hz, XNU 8796.121.2), the
+live S-Boot/EL1/GIC/framebuffer/RAM/payload/ADT/entry values, the XNU command
+line, a kernel-load progress bar, a nine-stage checklist, and a colour bar with
+a 16-step grey ramp at the bottom.
+
+`e1s.hold=N` in the payload command line keeps the finished screen up for N
+seconds before the jump. The test image uses `e1s.hold=5`; the loader removes
+that token from the command line it passes to XNU. The colour bar is the
+framebuffer format test: a red/blue swap means the channel order is not
+XRGB8888.
+
+Host preview of the exact UI code:
+`out/e1s-s24-boot-screen.png` (1080x2340). It is a render, not a phone capture.
+The Android/QEMU paths remain separate; QEMU `virt` still cannot run this XNU
+payload.
+
+The default and SMP images were repacked with the new loader. The XNU kernel
+and ADT bytes are unchanged from the previous images; the payload body hash
+(`78ebbf07f9b850f5156ec0f7578453a50de2680cfcbbe624023804f5e001dad0`)
+is the same. Only the loader and the `e1s.hold=5` token changed.
+
+The BOOT partition is 67,108,864 bytes. The default image is 16,388,112 bytes;
+it is not padded to the partition. S-Boot reads the v4 header's `kernel_size`,
+so the smaller image is valid. This is a new loader plus XNU payload, not a
+byte-patched stock `boot.img`.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-xnu/out/Image` | 118,784 | `8fb64331ad6788015f77fa44452290087c7fcdaa6076eec915c1e01731ffc3ea` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `b4aced0e7374027f6252fcf93444f4199ba9c7647517981fc36adb68a9d469b9` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `8d1902340f2a93ce464084c7e4c677e0da94e902d716ac747d41c4d8cc8de7e0` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `1f4a21b90ba7f6d1532cf7e7b2eb599d4494f83a8b35c93c30b75f2371c52d2c` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `f074e11ac0b8f86aca9a8ebb799c66c87a156048da7913735158eba6d65ea820` |
+
+All thirteen host checks, the new UI render test, and the QEMU nographic smoke
+test pass. No phone flash, no phone screen, and no device test. The boot screen
+is unobserved on hardware; the preview only proves the drawing code.

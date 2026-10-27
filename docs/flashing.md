@@ -105,27 +105,41 @@ cd shim/e1s-xnu && ./build.sh && cd ../..
 python3 tools/e1s/xnu/mkadt.py /tmp/e1s.adt
 python3 tools/e1s/xnu/mkpayload.py \
   ~/e1s-build/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s \
-  /tmp/e1s.adt /tmp/e1s.payload --cmdline "debug=0x14e cpus=1 keepsyms=1 -v"
+  /tmp/e1s.adt /tmp/e1s.payload --cmdline "debug=0x14e cpus=1 keepsyms=1 -v e1s.hold=5"
 python3 tools/e1s/append_payload.py --loader shim/e1s-xnu/out/Image \
   --payload /tmp/e1s.payload --output /tmp/e1s-Image
 python3 tools/e1s/mkboot.py --kernel /tmp/e1s-Image \
   --output out/e1s-boot-touch.img \
-  --cmdline "debug=0x14e cpus=1 keepsyms=1 -v" --tar
+  --cmdline "debug=0x14e cpus=1 keepsyms=1 -v e1s.hold=5" --tar
 python3 tools/e1s/verify_boot.py out/e1s-boot-touch.img \
   --tar out/e1s-boot-touch.img.tar
 ```
 
 The verifier must print `ok`. It checks the Samsung boot v4 header, the
-`SEANDROIDENFORCE` footer, the arm64 Image size, the SWEETXNU payload header
-and every segment. Do not flash if it fails.
+`SEANDROIDENFORCE` footer, the arm64 Image size, the SWEETXNU payload header,
+every segment, and that the image fits the 64 MiB BOOT partition. It prints the
+partition size and headroom. Do not flash if it fails.
+
+The loader draws a 1080x2340 portrait screen with the SM-S921B device
+information, the live handoff values, a kernel-load progress bar, a boot-stage
+checklist, and a colour bar. `e1s.hold=5` keeps the finished screen up for five
+seconds before the jump; the loader removes that token before it passes the
+command line to XNU. Remove it for a normal boot. The screen uses the S-Boot
+framebuffer (or the DTB base if one is supplied), not QEMU.
+
+The BOOT partition is 67,108,864 bytes. This image is 16,388,112 bytes; it is
+not padded to the partition size. S-Boot reads the v4 header's `kernel_size`,
+so a smaller image is valid. The image is a new loader plus the XNU payload,
+not a byte-patched copy of the stock `boot.img`.
 
 ### Display diagnostic variant (optional)
 
-The default image only prints the framebuffer summary. If the screen stays
-black, make a second image with the read-only DECON/DSIM/RDMA dump:
+The default image draws the loader screen and the XNU framebuffer summary. If
+the screen stays black, make a second image with the read-only
+DECON/DSIM/RDMA dump:
 
 ```sh
-CMDLINE="debug=0x14e cpus=1 keepsyms=1 -v e1sdisp=2"
+CMDLINE="debug=0x14e cpus=1 keepsyms=1 -v e1sdisp=2 e1s.hold=5"
 python3 tools/e1s/xnu/mkpayload.py \
   ~/e1s-build/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s \
   /tmp/e1s.adt /tmp/e1s-display.payload --cmdline "$CMDLINE"
@@ -145,20 +159,20 @@ This build produced:
 
 | File | Size |
 | --- | ---: |
-| `shim/e1s-xnu/out/Image` | 106,496 bytes |
-| `out/e1s-boot-touch.img` | 16,375,824 bytes |
-| `out/e1s-boot-touch.img.tar` | 16,384,000 bytes |
+| `shim/e1s-xnu/out/Image` | 118,784 bytes |
+| `out/e1s-boot-touch.img` | 16,388,112 bytes |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 bytes |
 
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
   `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68`
 - `e1s-boot-touch.img`:
-  `fc47a9e62bcd76fef8f55d0881ba1ef6c315345c3972a8f5ca6e5d3ffdacbcb9`
+  `b4aced0e7374027f6252fcf93444f4199ba9c7647517981fc36adb68a9d469b9`
 - `e1s-boot-touch.img.tar`:
-  `f056285ddacd8dfb41071b64e016b655ab3ccef2885cd7a53e18c3bfb6c0e197`
+  `8d1902340f2a93ce464084c7e4c677e0da94e902d716ac747d41c4d8cc8de7e0`
 
-The kernel payload at `0x1a000` now includes `0007` (ACPM/PMIC), `0008`
+The kernel payload at `0x1d000` now includes `0007` (ACPM/PMIC), `0008`
 (MAX77775 battery), `0009` (RTC calendar), `0010` (display state) and `0011`
 (persistent console ring). The command line has no `e1spmic`, `e1sbattery`,
 `e1srtc`, `e1sdisp`, `e1slog`, `e1scam` or `rd=ufsroot0` argument, so the
@@ -166,8 +180,10 @@ image uses the defaults: PMIC reads only (mode 1), battery reads only, RTC
 sets the calendar, the display report prints the framebuffer summary, the log
 ring is on, no camera probe, no UFS root. Add `e1sdisp=2` only for a
 diagnostic boot that may read the DECON/DSIM block; `e1slog=0` disables the
-ring for a comparison boot. The loader now scans all `/cpus` children, but the
-default ADT still has one CPU; the ten-core test image is `docs/e1s-smp.md`.
+ring for a comparison boot. The loader consumes `e1s.hold=5` for the screen
+hold and does not pass it to XNU. The loader now scans all `/cpus` children,
+but the default ADT still has one CPU; the ten-core test image is
+`docs/e1s-smp.md`.
 
 The BOOT image SHA-256 changes with every rebuild; use the verifier's value,
 not a hash copied from an old log. The ADT must be regenerated with
@@ -189,10 +205,13 @@ pad or register is touched. Enable it in a later test build with `e1scam=1`
 6. Connect the phone, wait for the COM indicator, then Start.
 7. Do not disconnect until Odin reports success.
 
-The loader clears the screen and prints `S24XNU LOADER (experimental e1s)`,
-the EL/SCTLR/DTB values, the DTB and fallback framebuffer, the RAM window it
-chose, the segment copies, the ADT and `boot_args` addresses, and
-`JUMP TO XNU`.
+The loader clears the screen and draws a 1080x2340 boot screen: `Galaxy S24`,
+`SM-S921B / e1s / Exynos 2400`, a device panel, the live handoff values
+(S-Boot, EL1, GIC, framebuffer, RAM window, payload, ADT, entry), the XNU
+command line, a kernel-load progress bar, the boot-stage checklist, and a
+colour bar at the bottom. `e1s.hold=5` keeps the finished screen up for five
+seconds before `JUMP TO XNU`. The same values are written to the
+`0x91200000` log.
 
 After the jump, XNU should print its early console and then `bsd_init` calls
 `e1s_pmic_init()` before the input driver. Expect `e1s-acpm:` lines describing
@@ -207,10 +226,13 @@ test is a missing-root stop after those summaries, not iOS boot. The UFS
 summary is register evidence, not a UFS command test. The camera probe is not
 called because `e1scam` is absent.
 
-Photograph the entire screen after at least 60 seconds. Record whether:
+Photograph the loader screen during the five-second hold, then photograph the
+XNU console after at least 60 seconds. Record whether:
 
-- the loader text appears at all (if not, the framebuffer address or the
+- the loader screen appears at all (if not, the framebuffer address or the
   boot image is wrong);
+- the colour bars are correct (a red/blue swap means the framebuffer channel
+  order is not XRGB8888);
 - the screen changes after `JUMP TO XNU` (XNU took over the video console);
 - the `e1s-acpm:` and `e1s-pmic:` lines appear, and what the channel dump and
   chip IDs say;

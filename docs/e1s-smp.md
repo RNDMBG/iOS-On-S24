@@ -40,7 +40,7 @@ read in the first log:
 
 ```sh
 KERNEL=~/e1s-build/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s
-CMDLINE="debug=0x14e cpus=10 small_cores_after=0 keepsyms=1 -v"
+CMDLINE="debug=0x14e cpus=10 small_cores_after=0 keepsyms=1 -v e1s.hold=5"
 
 python3 tools/e1s/xnu/mkadt.py --smp /tmp/e1s-smp.adt
 python3 tools/e1s/xnu/mkpayload.py "$KERNEL" /tmp/e1s-smp.adt \
@@ -56,14 +56,15 @@ python3 tools/e1s/verify_boot.py out/e1s-boot-smp.img \
 
 Keep the one-CPU image and its hashes; this is a separate diagnostic build.
 Both images carry `0011`, so the XNU ring is also present in this build; dump
-2 MiB at `0x91200000`.
+2 MiB at `0x91200000`. The loader draws the same 1080x2340 boot screen and
+consumes `e1s.hold=5`; it does not pass that token to XNU.
 
 Produced with the current kernel:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-smp.img` | 16,384,016 | `a1279030e39db180689ee94509f4b1aed31e30ea7419675815e9747ea256b78e` |
-| `out/e1s-boot-smp.img.tar` | 16,394,240 | `07ad699a203d0d513f8f9e08c814b2444329917d08a0db7184b8bc41382709d4` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `1f4a21b90ba7f6d1532cf7e7b2eb599d4494f83a8b35c93c30b75f2371c52d2c` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `f074e11ac0b8f86aca9a8ebb799c66c87a156048da7913735158eba6d65ea820` |
 
 ## What to look for
 

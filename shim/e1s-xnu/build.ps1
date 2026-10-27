@@ -19,7 +19,7 @@ $linkflags = @(
     '-Wl,--build-id=none',
     '-static'
 )
-& $zig cc @cflags @linkflags (Join-Path $here 'start.S') (Join-Path $here 'loader.c') (Join-Path $here 'adt_patch.c') (Join-Path $here 'gic.c') (Join-Path $here 'fdt.c') -o (Join-Path $out 'loader.elf')
+& $zig cc @cflags @linkflags (Join-Path $here 'start.S') (Join-Path $here 'loader.c') (Join-Path $here 'ui.c') (Join-Path $here 'adt_patch.c') (Join-Path $here 'gic.c') (Join-Path $here 'fdt.c') -o (Join-Path $out 'loader.elf')
 if ($LASTEXITCODE -ne 0) { throw 'zig cc failed' }
 & $zig objcopy -O binary (Join-Path $out 'loader.elf') (Join-Path $out 'Image')
 if ($LASTEXITCODE -ne 0) { throw 'objcopy failed' }
