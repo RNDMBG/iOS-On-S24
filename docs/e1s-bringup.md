@@ -438,7 +438,11 @@ disk starts with `E1S-UFS!`. A good run ends with:
 
 ```text
 E1S PROBE v1
-QEMU virt smoke test (not S24 hardware)
+Samsung Galaxy S24 (SM-S921B, e1s)
+Exynos 2400 (S5E9945), 10-core ARMv9, Xclipse 940
+8 GiB LPDDR5X, UFS 4.0, 1080x2340 120 Hz
+SIMULATED on QEMU virt - not official hardware
+FDT/GIC/UFS values below are QEMU virt models
 ...
   mem 0x0 0x40000000 0x0 0x20000000
 ...
@@ -454,6 +458,18 @@ QEMU EXIT
 missing UFS signature, or a nonzero QEMU exit. This is a code smoke test, not a
 boot test. It does not exercise S-Boot, the `0xFA200000` framebuffer, the
 Exynos UFS controller/PHY, or any other Samsung hardware.
+
+`run_qemu.ps1 -Display` adds QEMU's `ramfb` device and an SDL window. The probe
+draws a 1080x2340 portrait framebuffer (the SM-S921B resolution), prints the
+simulated S24 banner, and halts with the window open. The host window may be
+scaled to fit the desktop; QEMU's monitor `screendump` captures the native
+1080x2340 image. The banner and the FDT/GIC/UFS values are explicitly marked
+as simulated QEMU models.
+
+The Android Studio emulator cannot boot `out/e1s-boot-touch.img`. That file is
+a Samsung boot image containing a bare-metal e1s loader and XNU payload, not a
+Linux kernel/ramdisk, and the Android emulator does not model the Exynos 2400
+MMIO map. The freestanding QEMU probe above is the only emulated target.
 
 ## 4. Recovery and test procedure
 

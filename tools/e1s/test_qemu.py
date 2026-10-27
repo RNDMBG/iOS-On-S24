@@ -10,7 +10,8 @@ UFS_DISK = os.path.join(ROOT, "shim", "e1s", "out-qemu", "ufs.img")
 
 EXPECTED = (
     "E1S PROBE v1",
-    "QEMU virt smoke test (not S24 hardware)",
+    "Samsung Galaxy S24 (SM-S921B, e1s)",
+    "SIMULATED on QEMU virt",
     "PROBE DONE",
     "QEMU EXIT",
     "mem 0x0 0x40000000 0x0 0x20000000",

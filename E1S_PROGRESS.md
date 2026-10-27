@@ -798,3 +798,25 @@ SHA-256 `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68`.
 The kernel's absolute source path is part of the embedded strings, so the
 image size and hash depend on the build directory; use the verifier's value.
 No image has been flashed.
+
+## 2026-10-27 - QEMU simulated S24 screen
+
+The freestanding QEMU probe now configures QEMU's `ramfb` device through
+`fw_cfg` and draws a 1080x2340 portrait screen, the SM-S921B resolution. The
+banner identifies the simulated SM-S921B/Exynos 2400 and says
+`SIMULATED on QEMU virt - not official hardware`; the FDT/GIC/UFS values are
+marked as QEMU models. `run_qemu.ps1 -Display` opens an SDL window, and
+`test_qemu.py` checks the new banner strings. The Linux build now links with
+`-static` so GNU ld accepts the flat image layout.
+
+Native screenshot (QEMU `screendump`, not a phone capture):
+`out/e1s-s24-qemu.png` (1080x2340); the top crop used for review is
+`out/e1s-s24-qemu-top.png`.
+
+The Android Studio emulator cannot boot `out/e1s-boot-touch.img`. The image is
+an Android boot image whose kernel payload is our bare-metal e1s loader plus
+XNU, not a Linux kernel/ramdisk; the emulator also lacks the Exynos 2400 MMIO
+map. QEMU `virt` only runs the freestanding probe, not the XNU kernel.
+
+All thirteen host checks and the QEMU nographic smoke test pass. No phone test,
+no flash, and no claim that the XNU drivers work.

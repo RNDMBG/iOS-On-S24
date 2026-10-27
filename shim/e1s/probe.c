@@ -4,17 +4,18 @@
 
 #ifdef PROBE_QEMU
 #define FB_BASE          0x50000000UL
-#define FB_WIDTH         640U
-#define FB_HEIGHT        480U
-#define LOG_BASE         0x50200000UL
+#define FB_WIDTH         1080U
+#define FB_HEIGHT        2340U
+#define LOG_BASE         0x50A00000UL
 #define GICD_BASE        0x08000000UL
 #define GICR_BASE        0x080A0000UL
 #define UART_BASE        0x09000000UL
+#define FW_CFG_BASE      0x09020000UL
 #define PCI_ECAM_BASE    0x4010000000UL
 #define PCI_MMIO_BASE    0x10000000UL
-#define UFS_UTRL_BASE    0x50300000UL
-#define UFS_CMD_BASE     0x50400000UL
-#define UFS_DATA_BASE    0x50500000UL
+#define UFS_UTRL_BASE    0x50B00000UL
+#define UFS_CMD_BASE     0x50C00000UL
+#define UFS_DATA_BASE    0x50D00000UL
 #else
 #define FB_BASE          0xFA200000UL
 #define FB_WIDTH         1080U
@@ -31,11 +32,13 @@
 #define LOG_DATA_MAX     0xFF00U
 #define UFS_HCI_BASE     0x17100000UL
 
+#define SCREEN_MARGIN_X  16U
+#define SCREEN_MARGIN_Y  16U
 #define CHAR_SCALE       2
 #define CHAR_W           (8 * CHAR_SCALE)
 #define CHAR_H           (16 * CHAR_SCALE)
-#define COLS             (FB_WIDTH / CHAR_W)
-#define ROWS             (FB_HEIGHT / CHAR_H)
+#define COLS             ((FB_WIDTH - 2 * SCREEN_MARGIN_X) / CHAR_W)
+#define ROWS             ((FB_HEIGHT - 2 * SCREEN_MARGIN_Y) / CHAR_H)
 
 extern char _head[];
 extern char _end[];
@@ -43,6 +46,11 @@ void halt(void) __attribute__((noreturn));
 static void out(const char *s);
 static void hex(uint64_t v);
 static inline uint32_t be32(const uint8_t *p);
+static inline uint16_t be16(const uint8_t *p);
+
+#ifdef PROBE_QEMU
+static int ramfb_ready;
+#endif
 
 static int screen_ready;
 static int log_ready;
@@ -50,6 +58,7 @@ static int exception_busy;
 static uint32_t log_pos;
 static uint32_t screen_row;
 static uint32_t screen_col;
+static int screen_dirty_row;
 
 static inline uint32_t rd32(uintptr_t a)
 {
@@ -89,6 +98,97 @@ static void qemu_exit(int code)
 	__asm__ volatile("hlt #0xf000" : "+r"(x0) : "r"(x1) : "memory");
 	for (;;)
 		__asm__ volatile("wfe");
+}
+
+#define FW_CFG_FILE_DIR     0x0019U
+#define FW_CFG_DMA_ERROR    0x0001U
+#define FW_CFG_DMA_READ     0x0002U
+#define FW_CFG_DMA_SELECT   0x0008U
+#define FW_CFG_DMA_WRITE    0x0010U
+#define RAMFB_XRGB8888      0x34325258U
+
+struct fw_cfg_dma {
+	uint32_t control;
+	uint32_t length;
+	uint64_t address;
+} __attribute__((packed));
+
+struct ramfb_config {
+	uint64_t address;
+	uint32_t fourcc;
+	uint32_t flags;
+	uint32_t width;
+	uint32_t height;
+	uint32_t stride;
+} __attribute__((packed));
+
+static struct fw_cfg_dma fw_dma __attribute__((aligned(8)));
+static uint8_t fw_dir[0x1000] __attribute__((aligned(8)));
+static struct ramfb_config ramfb_cfg __attribute__((aligned(8)));
+
+static int fw_cfg_dma(uint32_t control, const void *data, uint32_t len)
+{
+	volatile struct fw_cfg_dma *dma = &fw_dma;
+
+	dma->control = __builtin_bswap32(control);
+	dma->length = __builtin_bswap32(len);
+	dma->address = __builtin_bswap64((uint64_t)(uintptr_t)data);
+	__asm__ volatile("dsb sy" ::: "memory");
+	*(volatile uint64_t *)(FW_CFG_BASE + 16) =
+	    __builtin_bswap64((uint64_t)(uintptr_t)&fw_dma);
+	for (uint32_t i = 0; i < 1000000U; i++) {
+		uint32_t c = __builtin_bswap32(dma->control);
+
+		if (!c)
+			return 0;
+		if (c & FW_CFG_DMA_ERROR)
+			return -1;
+	}
+	return -1;
+}
+
+static int ramfb_name_eq(const char *a, const char *b)
+{
+	while (*a && *a == *b) {
+		a++;
+		b++;
+	}
+	return *a == 0 && *b == 0;
+}
+
+static void ramfb_init(void)
+{
+	uint32_t count;
+	uint16_t sel = 0;
+
+	if (fw_cfg_dma((FW_CFG_FILE_DIR << 16) | FW_CFG_DMA_SELECT |
+	    FW_CFG_DMA_READ, fw_dir, sizeof(fw_dir)))
+		return;
+	count = be32(fw_dir);
+	if (count > 0x3fU)
+		count = 0x3fU;
+	for (uint32_t i = 0; i < count; i++) {
+		const uint8_t *entry = fw_dir + 4 + i * 64;
+		const char *name = (const char *)(entry + 8);
+
+		if (ramfb_name_eq(name, "etc/ramfb")) {
+			sel = be16(entry + 4);
+			break;
+		}
+	}
+	if (!sel)
+		return;
+
+	ramfb_cfg.address = __builtin_bswap64(FB_BASE);
+	ramfb_cfg.fourcc = __builtin_bswap32(RAMFB_XRGB8888);
+	ramfb_cfg.flags = 0;
+	ramfb_cfg.width = __builtin_bswap32(FB_WIDTH);
+	ramfb_cfg.height = __builtin_bswap32(FB_HEIGHT);
+	ramfb_cfg.stride = __builtin_bswap32(FB_STRIDE);
+	if (fw_cfg_dma((sel << 16) | FW_CFG_DMA_SELECT | FW_CFG_DMA_WRITE,
+	    &ramfb_cfg, sizeof(ramfb_cfg)))
+		return;
+	ramfb_ready = 1;
 }
 
 static uintptr_t pci_cfg(uint32_t dev, uint32_t fn, uint32_t reg)
@@ -341,7 +441,14 @@ static void screen_init(void)
 	fill_rect(0, 0, FB_WIDTH, FB_HEIGHT, 0xFF000000U);
 	screen_row = 0;
 	screen_col = 0;
+	screen_dirty_row = 0;
 	screen_ready = 1;
+}
+
+static void screen_clear_row(uint32_t row)
+{
+	fill_rect(0, SCREEN_MARGIN_Y + row * CHAR_H, FB_WIDTH, CHAR_H,
+	    0xFF000000U);
 }
 
 static void screen_putc(char c)
@@ -358,6 +465,7 @@ static void screen_putc(char c)
 		screen_row++;
 		if (screen_row >= ROWS)
 			screen_row = 0;
+		screen_dirty_row = 1;
 		return;
 	}
 	if ((unsigned char)c < 0x20 || (unsigned char)c > 0x7e)
@@ -367,10 +475,15 @@ static void screen_putc(char c)
 		screen_row++;
 		if (screen_row >= ROWS)
 			screen_row = 0;
+		screen_dirty_row = 1;
+	}
+	if (screen_dirty_row) {
+		screen_clear_row(screen_row);
+		screen_dirty_row = 0;
 	}
 	glyph = font8x16[(unsigned char)c - 0x20];
-	x = screen_col * CHAR_W;
-	y = screen_row * CHAR_H;
+	x = SCREEN_MARGIN_X + screen_col * CHAR_W;
+	y = SCREEN_MARGIN_Y + screen_row * CHAR_H;
 	for (uint32_t gy = 0; gy < 16; gy++) {
 		unsigned char bits = glyph[gy];
 		for (uint32_t gx = 0; gx < 8; gx++) {
@@ -442,6 +555,11 @@ static void kv(const char *k, uint64_t v)
 	out_char('=');
 	hex(v);
 	out_char(' ');
+}
+
+static inline uint16_t be16(const uint8_t *p)
+{
+	return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
 }
 
 static inline uint32_t be32(const uint8_t *p)
@@ -698,6 +816,8 @@ void probe_exception(uint64_t slot)
 	log_finish();
 	fill_rect(0, 0, FB_WIDTH, 160, 0x00FF0000U);
 #ifdef PROBE_QEMU
+	if (ramfb_ready)
+		halt();
 	qemu_exit(1);
 #endif
 	halt();
@@ -707,14 +827,19 @@ void probe_main(uintptr_t dtb)
 {
 #ifdef PROBE_QEMU
 	uart_init();
+	ramfb_init();
 #endif
 	log_init();
 	screen_init();
 	out("E1S PROBE v1\n");
+	out("Samsung Galaxy S24 (SM-S921B, e1s)\n");
+	out("Exynos 2400 (S5E9945), 10-core ARMv9, Xclipse 940\n");
+	out("8 GiB LPDDR5X, UFS 4.0, 1080x2340 120 Hz\n");
 #ifdef PROBE_QEMU
-	out("QEMU virt smoke test (not S24 hardware)\n");
+	out("SIMULATED on QEMU virt - not official hardware\n");
+	out("FDT/GIC/UFS values below are QEMU virt models\n");
 #else
-	out("SM-S921B e1s S5E9945\n");
+	out("SM-S921B hardware probe\n");
 #endif
 	out("image ");
 	hex((uintptr_t)_head);
@@ -741,6 +866,11 @@ void probe_main(uintptr_t dtb)
 	out("\nPROBE DONE\n");
 	log_finish();
 #ifdef PROBE_QEMU
+	if (ramfb_ready) {
+		out("QEMU display active (close the window to stop)\n");
+		log_finish();
+		halt();
+	}
 	out("QEMU EXIT\n");
 	qemu_exit(0);
 #endif

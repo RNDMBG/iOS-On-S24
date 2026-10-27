@@ -262,6 +262,16 @@ registers, PCI/UFS register path, UFS command/data path, and exception output.
 It does not test S-Boot, the S24 framebuffer, the Exynos UFS controller/PHY, or
 any other Samsung hardware.
 
+`run_qemu.ps1 -Display` adds QEMU's `ramfb` device and an SDL window. The probe
+draws a 1080x2340 portrait screen with a simulated SM-S921B banner and keeps the
+window open. The native framebuffer can be captured with QEMU's `screendump`;
+`out/e1s-s24-qemu.png` is one such capture. This is still the freestanding
+probe, not an XNU boot, and the banner says the hardware data is simulated.
+
+The Android Studio emulator cannot boot `out/e1s-boot-touch.img`: it is a
+Samsung boot image containing a bare-metal e1s loader/XNU payload, not a Linux
+kernel/ramdisk, and the emulator does not model the Exynos 2400 MMIO map.
+
 The runner needs `qemu-system-aarch64`. On Windows it also checks the default
 `C:\Program Files\qemu` install path.
 

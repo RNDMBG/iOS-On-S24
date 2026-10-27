@@ -1,7 +1,8 @@
 param(
     [string]$Qemu = "qemu-system-aarch64",
     [string]$Zig = $env:ZIG,
-    [switch]$Build
+    [switch]$Build,
+    [switch]$Display
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,10 +49,19 @@ $fs.Position = 0
 $fs.Write($signature, 0, $signature.Length)
 $fs.Close()
 
-& $qemuPath -M virt,gic-version=3 -cpu cortex-a72 -m 512 `
-    -nographic -semihosting-config enable=on,target=native `
-    -device ufs `
-    -drive "if=none,id=ufsdisk,file=$ufsDisk,format=raw" `
-    -device ufs-lu,drive=ufsdisk,lun=0 `
-    -kernel $image
+$qemuArgs = @(
+    "-M", "virt,gic-version=3", "-cpu", "cortex-a72", "-m", "512",
+    "-semihosting-config", "enable=on,target=native",
+    "-device", "ufs",
+    "-drive", "if=none,id=ufsdisk,file=$ufsDisk,format=raw",
+    "-device", "ufs-lu,drive=ufsdisk,lun=0"
+)
+if ($Display) {
+    $qemuArgs += @("-display", "sdl", "-serial", "stdio", "-device", "ramfb")
+} else {
+    $qemuArgs += @("-nographic")
+}
+$qemuArgs += @("-kernel", $image)
+
+& $qemuPath @qemuArgs
 exit $LASTEXITCODE
