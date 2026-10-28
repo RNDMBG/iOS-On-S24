@@ -1,6 +1,7 @@
 out/
 shim/e1s/out/
 shim/e1s/out-qemu/
+shim/e1s-menu/out-qemu/
 *.img
 *.img.tar
 *.bin

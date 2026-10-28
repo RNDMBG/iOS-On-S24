@@ -5,17 +5,18 @@ Three formats exist:
 
   E1SPRB1  the old probe (96 KiB image), 16-byte header, text at +16
   E1SXNU01 the XNU loader, 16-byte header, length at +8
+  E1SMENU1 the boot menu, 16-byte header, length at +8
   E1SXNU02 the XNU console ring at 0x91300000, 40-byte header, ring data
 
-The loader and probe records live at physical 0x91200000.  The XNU ring is in
-the second MiB of the same 2 MiB sec_debug_next reservation; dump 2 MiB to
-capture both.
+The loader, probe, and menu records live at physical 0x91200000.  The XNU ring
+is in the second MiB of the same 2 MiB sec_debug_next reservation; dump 2 MiB
+to capture both.
 """
 import argparse
 import struct
 import sys
 
-MAGICS = (b"E1SXNU01", b"E1SPRB1\0")
+MAGICS = (b"E1SXNU01", b"E1SPRB1\0", b"E1SMENU1")
 HEADER = 16
 MAX_TEXT = 0xFF00
 

@@ -58,6 +58,8 @@ Checked means the item exists in the repository and passes its host checks.
       `mach.development.e1s`.
 - [x] Wrote the EL2/EL1 loader, framebuffer discovery, DTB RAM-window
       selection, ADT patch, and `SWEETXNU` payload handoff (untested).
+- [x] Built a stock-kernel boot screen and menu chainloader around the dumped
+      `boot.img`, with an auto-boot image that does not read the key (untested).
 - [x] Wrote the e1s volume-up driver and the STM SPI9 touch driver (untested).
 - [x] Wrote a polled, read-only UFS 4.0/MCQ block driver with GPT partition
       lookup and a `ufsroot0` root hook (untested).
@@ -164,8 +166,8 @@ builds the real HackiOS base instead of the old SWEET series:
   iOS 16.5 IPSW and extract its `/product` tree.
 - `.github/workflows/xnu.yml`: applies the pinned base and the whole e1s
   series on Ubuntu, then runs the host ADT/FDT/touch/keys/UFS/camera/PMIC/
-  battery/RTC/display/log/port-map/SMP/UI checks. It does not build the
-  kernel.
+  battery/RTC/display/log/port-map/SMP/UI/menu checks and the QEMU menu
+  smoke test. It does not build the kernel.
 
 The driver-by-driver disposition of the HackiOS `redwood_*` tree (kept,
 gated, replaced, not applicable, or still missing) is in
@@ -241,11 +243,54 @@ screen and the test token changed. The flash procedure is in
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `shim/e1s-xnu/out/Image` | 118,784 | `8fb64331ad6788015f77fa44452290087c7fcdaa6076eec915c1e01731ffc3ea` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `b4aced0e7374027f6252fcf93444f4199ba9c7647517981fc36adb68a9d469b9` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `8d1902340f2a93ce464084c7e4c677e0da94e902d716ac747d41c4d8cc8de7e0` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `1f4a21b90ba7f6d1532cf7e7b2eb599d4494f83a8b35c93c30b75f2371c52d2c` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `f074e11ac0b8f86aca9a8ebb799c66c87a156048da7913735158eba6d65ea820` |
+| `shim/e1s-xnu/out/Image` | 118,784 | `132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `45c59a9bcba91cb36349ae5e2f46b251910cc4ad859b7da616158c2334e12e45` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `92be1b03136835b78c73909e3225a140e038f69b081381762ecd43f8448c7507` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `bae184aabfb289eb2cc8a6333c2b84d8de5c10a5a4680de0684ecdfb7a2229a4` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `e39cca6bc10454cd6e22d1f4df63d7215f3532c8fa518ec14b5f4f87797aed5e` |
+
+### Stock-kernel boot screen and menu
+
+`shim/e1s-menu/` is a separate chainloader built from the user's dumped
+`boot-stock.img`. It keeps the stock Linux kernel at `+0x200000`, draws the
+same 1080x2340 screen, and either boots Android after five seconds or offers
+Android, Recovery, and Download. The combined image also embeds the XNU
+loader. The stub's arm64 `image_size` covers the stock kernel's full
+`image_size`, so S-Boot places the DTB after the stock BSS.
+
+The safe first image is `out/e1s-boot-android.img.tar`: it never reads the
+volume-key register and always boots Android. The key-menu image reads
+`0x12850064` bit 0, the same derived ALIVE GPIO address as the XNU driver; that
+read has not been measured on hardware. The Recovery/Download choices reset
+through PSCI and ask the user to hold the S-Boot key combination; those
+combinations are not verified on `e1s`.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-menu/out/Image` | 131,160 | `7c5031c5fe533d1b17fa40ddf7dc7fc68d8f5a898424f37733a888371e68a9da` |
+| `out/e1s-boot-android.img` | 39,743,504 | `8454079ebd7c3c3b2c2eaf567efa690c64cbaa45ba4d2dbec9f729ffee7fb42d` |
+| `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
+| `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
+| `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `733872985aa0cf649b7dcfe2a144cc9019339117ecbc05a1e8cbb146014a314a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `fe4f26d2abab3322bf53434185b593e35ec5eab85cb5d28713db015b4ce18f71` |
+
+Build the stock-kernel image with:
+
+```sh
+bash shim/e1s-menu/build.sh
+python3 tools/e1s/mkmenu.py --stock-boot /path/to/boot-stock.img \
+  --stub shim/e1s-menu/out/Image --output out/e1s-boot-android.img \
+  --no-menu --tar
+python3 tools/e1s/verify_boot.py out/e1s-boot-android.img --menu \
+  --tar out/e1s-boot-android.img.tar
+```
+
+Use `--xnu-boot out/e1s-boot-touch.img` for the combined image. The verifier
+checks the stock header, the 2 MiB placement, the BSS reservation, the XNU
+loader when present, and the 64 MiB headroom. No image here has been flashed.
+The previews are `out/e1s-s24-boot-android.png` and
+`out/e1s-s24-menu-menu.png`; they are host renders, not phone captures.
 
 ## Building
 
@@ -287,6 +332,18 @@ registers, PCI/UFS register path, UFS command/data path, and exception output.
 It does not test S-Boot, the S24 framebuffer, the Exynos UFS controller/PHY, or
 any other Samsung hardware.
 
+For the stock-kernel menu stub:
+
+```sh
+sh shim/e1s-menu/build-qemu.sh
+python3 tools/e1s/test_e1s_menu_qemu.py
+```
+
+It builds the real stub with a fake framebuffer, no key MMIO and no GIC probe,
+packs a synthetic stock kernel, waits five seconds, validates and cleans the
+cache, then jumps to it and expects `E1S MENU JUMP`. It does not execute the
+Samsung stock kernel.
+
 `run_qemu.ps1 -Display` adds QEMU's `ramfb` device and an SDL window. The probe
 draws a 1080x2340 portrait screen with a simulated SM-S921B banner and keeps the
 window open. The native framebuffer can be captured with QEMU's `screendump`;
@@ -321,10 +378,15 @@ What you need:
 The steps:
 
 1. Write down the firmware and TWRP version, and hash the BOOT backup.
-2. Build and check `out/boot.img.tar`.
-3. Flash only BOOT in Odin.
-4. Photograph `E1S PROBE v1` if it appears.
-5. Boot TWRP and read physical `0x91200000`.
+2. Build and check `out/e1s-boot-android.img.tar` for the first stock-kernel
+   screen test. The XNU handoff image is `out/e1s-boot-touch.img.tar`.
+3. Flash only BOOT in Odin. Use `out/e1s-boot-android.img.tar` first; it never
+   reads the volume-key register and boots Android after five seconds. Use
+   `out/e1s-boot-menu.img.tar` only after that works if you want the
+   Android/Recovery/Download menu.
+4. Photograph the boot screen and the Android result if they appear.
+5. Boot TWRP and read physical `0x91200000` for the `E1SMENU1` log. The XNU
+   images also write `E1SXNU01` and the `E1SXNU02` ring.
 6. Put the stock BOOT image back.
 
 The exact commands and the cases where you should stop are in
@@ -350,9 +412,10 @@ The exact commands and the cases where you should stop are in
 ```text
 shim/e1s/          Probe source and build scripts
 shim/e1s-xnu/      Experimental XNU loader (GIC prep, payload, boot args)
+shim/e1s-menu/     Stock-kernel boot screen/menu chainloader
 tools/e1s/         Boot image packer, ADT/payload builders, QEMU runner,
-                   boot-screen preview/test, topaz-derived iOS-root/userland
-                   tools
+                   boot-screen/menu preview/test, topaz-derived
+                   iOS-root/userland tools
 docs/              Bring-up notes and the flash/test procedure
 AGENTS.md          Notes for anyone continuing the work
 E1S_PROGRESS.md    Build history and device notes

@@ -3,44 +3,44 @@
 #include "../e1s/font.h"
 
 #define C_BG       0xff000000U
-#define C_ACCENT   0xff4da3ffU
-#define C_LINE     0xff243041U
-#define C_BAR_BG   0xff111827U
-#define C_BAR_EDGE 0xff374151U
+#define C_LINE     0xff303030U
+#define C_BAR_BG   0xff101010U
+#define C_BAR_EDGE 0xff505050U
 
-#define MARGIN      48
-#define VALUE_X     360
+#define MARGIN      56
+#define VALUE_X     320
 #define TEXT_SCALE  2
 #define SMALL_SCALE 1
-#define ROW_H       40
+#define ROW_H       42
 
-#define HDR_TITLE_Y  40
-#define HDR_SUB_Y    128
-#define HDR_SUB2_Y   168
-#define HDR_LINE_Y   204
-#define DEV_SEC_Y    232
-#define DEV_ROW_Y    288
-#define BOOT_SEC_Y   632
-#define BOOT_ROW_Y   688
-#define KIMG_SEC_Y   1040
-#define KIMG_ROW_Y   1096
-#define LOAD_SEC_Y   1240
-#define LOAD_BAR_Y   1300
-#define LOAD_LABEL_Y 1340
-#define LOAD_STATUS_Y 1380
-#define STAGE_SEC_Y  1450
-#define STAGE_ROW_Y  1506
-#define STAGE_ROW_H  36
-#define COLOR_CAP_Y  1866
-#define COLOR_BAR_Y  1910
-#define COLOR_BAR_H  206
-#define COLOR_LABEL_Y 2126
-#define GREY_Y       2160
-#define GREY_H       40
-#define GREY_LABEL_Y 2208
-#define FOOT_LINE_Y  2242
-#define FOOT_TEXT_Y  2258
-#define BOTTOM_BAR_Y 2332
+#define HDR_BRAND_Y   36
+#define HDR_TITLE_Y   64
+#define HDR_MODEL_Y   120
+#define HDR_SUB_Y     154
+#define HDR_LINE_Y    190
+
+#define DEV_ROW_Y     220
+#define BOOT_ROW_Y    588
+#define KERNEL_ROW_Y  956
+
+#define LOAD_TITLE_Y  1114
+#define LOAD_BAR_Y    1154
+#define LOAD_LABEL_Y  1194
+#define LOAD_STATUS_Y 1234
+
+#define STAGE_ROW_Y   1284
+#define STAGE_ROW_H   36
+
+#define COLOR_CAP_Y   1740
+#define COLOR_BAR_Y   1772
+#define COLOR_BAR_H   200
+#define COLOR_LABEL_Y 1984
+#define GREY_Y        2016
+#define GREY_H        36
+#define GREY_LABEL_Y  2060
+
+#define FOOT_LINE_Y   2124
+#define FOOT_TEXT_Y   2142
 
 static void rect(const struct ui_fb *fb, int x, int y, int w, int h,
     uint32_t color)
@@ -163,13 +163,6 @@ char *ui_put_mb(char *p, uint64_t bytes)
 	return p;
 }
 
-static void section(const struct ui_fb *fb, int y, const char *title)
-{
-	rect(fb, MARGIN, y + 6, 8, 20, C_ACCENT);
-	text(fb, MARGIN + 20, y, title, C_ACCENT, TEXT_SCALE);
-	rect(fb, MARGIN, y + 38, (int)fb->width - 2 * MARGIN, 2, C_LINE);
-}
-
 static void row_label(const struct ui_fb *fb, int y, const char *label)
 {
 	text(fb, MARGIN, y, label, UI_TEXT_DIM, TEXT_SCALE);
@@ -217,7 +210,7 @@ static const char *const device_values[] = {
 
 static const char *const boot_labels[] = {
 	"S-Boot",
-	"Exception",
+	"EL",
 	"GIC",
 	"Framebuffer",
 	"RAM window",
@@ -245,10 +238,8 @@ static void colour_bars(const struct ui_fb *fb)
 	int inner_x = MARGIN + 2;
 	int inner_w = (int)fb->width - 2 * MARGIN - 4;
 
-	text(fb, MARGIN, COLOR_CAP_Y, "DISPLAY COLOUR TEST", C_ACCENT,
-	    TEXT_SCALE);
-	text_right(fb, (int)fb->width - MARGIN, COLOR_CAP_Y + 6,
-	    "8 BARS + 16-STEP GREY RAMP", UI_TEXT_MUTED, SMALL_SCALE);
+	text(fb, MARGIN, COLOR_CAP_Y, "panel colour test", UI_TEXT_MUTED,
+	    SMALL_SCALE);
 
 	rect(fb, MARGIN, COLOR_BAR_Y, (int)fb->width - 2 * MARGIN,
 	    COLOR_BAR_H, C_BAR_EDGE);
@@ -282,44 +273,34 @@ static void colour_bars(const struct ui_fb *fb)
 void ui_begin(const struct ui_fb *fb)
 {
 	rect(fb, 0, 0, (int)fb->width, (int)fb->height, C_BG);
-	rect(fb, 0, 0, (int)fb->width, 8, C_ACCENT);
 
-	text(fb, MARGIN, HDR_TITLE_Y, "Galaxy S24", UI_TEXT_MAIN, 4);
-	text(fb, MARGIN, HDR_SUB_Y, "SM-S921B  |  e1s  |  Exynos 2400",
+	text(fb, MARGIN, HDR_BRAND_Y, "SAMSUNG", UI_TEXT_MUTED, SMALL_SCALE);
+	text(fb, MARGIN, HDR_TITLE_Y, "Galaxy S24", UI_TEXT_MAIN, 3);
+	text(fb, MARGIN, HDR_MODEL_Y, "SM-S921B  |  e1s  |  Exynos 2400",
 	    UI_TEXT_DIM, TEXT_SCALE);
-	text(fb, MARGIN, HDR_SUB2_Y, "XNU 8796.121.2  |  BOOT-only bring-up",
-	    UI_TEXT_MUTED, TEXT_SCALE);
-
-	rect(fb, 808, 48, 224, 88, C_BG);
-	rect(fb, 808, 48, 224, 2, UI_TEXT_WARN);
-	rect(fb, 808, 134, 224, 2, UI_TEXT_WARN);
-	rect(fb, 808, 48, 2, 88, UI_TEXT_WARN);
-	rect(fb, 1030, 48, 2, 88, UI_TEXT_WARN);
-	text(fb, 824, 64, "EXPERIMENTAL", UI_TEXT_WARN, TEXT_SCALE);
-	text(fb, 824, 104, "e1s loader", UI_TEXT_MUTED, TEXT_SCALE);
+	text(fb, MARGIN, HDR_SUB_Y,
+	    "XNU 8796.121.2  |  e1s boot loader  |  experimental",
+	    UI_TEXT_MUTED, SMALL_SCALE);
 
 	rect(fb, MARGIN, HDR_LINE_Y, (int)fb->width - 2 * MARGIN, 2, C_LINE);
 
-	section(fb, DEV_SEC_Y, "DEVICE");
 	for (int i = 0; i < 8; i++) {
 		row_label(fb, DEV_ROW_Y + i * ROW_H, device_labels[i]);
 		row_value(fb, DEV_ROW_Y + i * ROW_H, device_values[i],
 		    UI_TEXT_MAIN);
 	}
 
-	section(fb, BOOT_SEC_Y, "BOOT HANDOFF");
 	for (int i = 0; i < 8; i++)
 		row_label(fb, BOOT_ROW_Y + i * ROW_H, boot_labels[i]);
 
-	section(fb, KIMG_SEC_Y, "KERNEL IMAGE");
 	for (int i = 0; i < 3; i++)
-		row_label(fb, KIMG_ROW_Y + i * ROW_H, kernel_labels[i]);
+		row_label(fb, KERNEL_ROW_Y + i * ROW_H, kernel_labels[i]);
 
-	section(fb, LOAD_SEC_Y, "KERNEL LOAD");
+	text(fb, MARGIN, LOAD_TITLE_Y, "Loading kernel", UI_TEXT_MAIN,
+	    TEXT_SCALE);
 	ui_set_progress(fb, 0, "Waiting for boot data");
 	ui_set_status(fb, "", UI_TEXT_MUTED);
 
-	section(fb, STAGE_SEC_Y, "BOOT SEQUENCE");
 	for (int i = 0; i < UI_STAGE_COUNT; i++)
 		ui_set_stage(fb, i, UI_PENDING);
 
@@ -327,11 +308,10 @@ void ui_begin(const struct ui_fb *fb)
 
 	rect(fb, MARGIN, FOOT_LINE_Y, (int)fb->width - 2 * MARGIN, 2, C_LINE);
 	text(fb, MARGIN, FOOT_TEXT_Y,
-	    "e1s bring-up loader  |  experimental BOOT-only test image",
+	    "e1s loader  |  experimental BOOT-only test image",
 	    UI_TEXT_MUTED, SMALL_SCALE);
 	text_right(fb, (int)fb->width - MARGIN, FOOT_TEXT_Y,
 	    "not official firmware", UI_TEXT_MUTED, SMALL_SCALE);
-	rect(fb, 0, BOTTOM_BAR_Y, (int)fb->width, 8, C_ACCENT);
 }
 
 void ui_set_info(const struct ui_fb *fb, const struct ui_boot_info *info)
@@ -339,9 +319,7 @@ void ui_set_info(const struct ui_fb *fb, const struct ui_boot_info *info)
 	char b[200];
 	char *p;
 
-	p = b;
-	p = ui_put_str(p, "accepted boot.img");
-	row_value(fb, BOOT_ROW_Y, b, UI_TEXT_OK);
+	row_value(fb, BOOT_ROW_Y, "entered loader", UI_TEXT_OK);
 
 	p = b;
 	p = ui_put_str(p, "EL");
@@ -392,14 +370,14 @@ void ui_set_info(const struct ui_fb *fb, const struct ui_boot_info *info)
 
 	p = b;
 	p = ui_put_hex(p, info->virt_base);
-	row_value(fb, KIMG_ROW_Y, b, UI_TEXT_MAIN);
+	row_value(fb, KERNEL_ROW_Y, b, UI_TEXT_MAIN);
 
 	p = b;
 	p = ui_put_hex(p, info->phys_base);
-	row_value(fb, KIMG_ROW_Y + ROW_H, b, UI_TEXT_MAIN);
+	row_value(fb, KERNEL_ROW_Y + ROW_H, b, UI_TEXT_MAIN);
 
 	if (info->cmdline)
-		text_n(fb, VALUE_X, KIMG_ROW_Y + 2 * ROW_H,
+		text_n(fb, VALUE_X, KERNEL_ROW_Y + 2 * ROW_H,
 		    info->cmdline, 42, UI_TEXT_DIM, TEXT_SCALE);
 }
 
@@ -414,7 +392,6 @@ void ui_set_stage(const struct ui_fb *fb, int stage, int state)
 		return;
 	y = STAGE_ROW_Y + stage * STAGE_ROW_H;
 	rect(fb, 0, y, (int)fb->width, STAGE_ROW_H, C_BG);
-	rect(fb, 32, y + 4, 4, 24, state == UI_ACTIVE ? C_ACCENT : C_BG);
 
 	switch (state) {
 	case UI_ACTIVE:
@@ -423,7 +400,7 @@ void ui_set_stage(const struct ui_fb *fb, int stage, int state)
 		name_color = UI_TEXT_MAIN;
 		break;
 	case UI_OK:
-		mark = "OK";
+		mark = "ok";
 		mark_color = UI_TEXT_OK;
 		name_color = UI_TEXT_MAIN;
 		break;
@@ -461,15 +438,15 @@ void ui_set_progress(const struct ui_fb *fb, int percent, const char *label)
 	p = ui_put_dec(p, (uint64_t)percent);
 	p = ui_put_str(p, "%");
 
-	rect(fb, 940, LOAD_SEC_Y, 92, 32, C_BG);
-	text_right(fb, (int)fb->width - MARGIN, LOAD_SEC_Y, b, UI_TEXT_MAIN,
+	rect(fb, 760, LOAD_TITLE_Y, (int)fb->width - MARGIN - 760, 32, C_BG);
+	text_right(fb, (int)fb->width - MARGIN, LOAD_TITLE_Y, b, UI_TEXT_MAIN,
 	    TEXT_SCALE);
 
 	rect(fb, MARGIN, LOAD_BAR_Y, bar_w, 28, C_BAR_EDGE);
 	rect(fb, MARGIN + 2, LOAD_BAR_Y + 2, bar_w - 4, 24, C_BAR_BG);
 	fill = (bar_w - 4) * percent / 100;
 	if (fill > 0)
-		rect(fb, MARGIN + 2, LOAD_BAR_Y + 2, fill, 24, C_ACCENT);
+		rect(fb, MARGIN + 2, LOAD_BAR_Y + 2, fill, 24, UI_TEXT_MAIN);
 
 	rect(fb, MARGIN, LOAD_LABEL_Y, bar_w, 32, C_BG);
 	text_n(fb, MARGIN, LOAD_LABEL_Y, label, 61, UI_TEXT_MAIN, TEXT_SCALE);
@@ -484,14 +461,13 @@ void ui_set_status(const struct ui_fb *fb, const char *text, uint32_t color)
 void ui_fail(const struct ui_fb *fb, const char *why)
 {
 	int x = MARGIN;
-	int y = LOAD_SEC_Y - 8;
+	int y = LOAD_TITLE_Y - 8;
 	int w = (int)fb->width - 2 * MARGIN;
-	int h = 170;
 
-	rect(fb, x, y, w, h, UI_TEXT_ERR);
-	rect(fb, x + 2, y + 2, w - 4, h - 4, 0xff2a0b0b);
-	text(fb, x + 24, y + 18, "BOOT FAILED", UI_TEXT_MAIN, TEXT_SCALE);
-	text_n(fb, x + 24, y + 58, why, 52, UI_TEXT_ERR, TEXT_SCALE);
-	text(fb, x + 24, y + 98, "halted - see the 0x91200000 log",
+	rect(fb, x, y, w, 180, C_BG);
+	rect(fb, x, y, w, 4, UI_TEXT_ERR);
+	text(fb, x, y + 20, "BOOT FAILED", UI_TEXT_ERR, TEXT_SCALE);
+	text_n(fb, x, y + 64, why, 58, UI_TEXT_MAIN, TEXT_SCALE);
+	text(fb, x, y + 108, "halted - see the 0x91200000 log",
 	    UI_TEXT_DIM, TEXT_SCALE);
 }

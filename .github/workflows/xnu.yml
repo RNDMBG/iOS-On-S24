@@ -8,6 +8,7 @@ on:
       - "xnu/hackios/**"
       - "xnu/e1s/**"
       - "shim/e1s-xnu/**"
+      - "shim/e1s-menu/**"
       - "tools/e1s/**"
       - ".github/workflows/xnu.yml"
   pull_request:
@@ -15,6 +16,7 @@ on:
       - "xnu/hackios/**"
       - "xnu/e1s/**"
       - "shim/e1s-xnu/**"
+      - "shim/e1s-menu/**"
       - "tools/e1s/**"
 
 concurrency:
@@ -44,6 +46,15 @@ jobs:
           python3 tools/e1s/test_e1s_port_map.py
           python3 tools/e1s/test_e1s_smp.py
           python3 tools/e1s/test_e1s_ui.py
+          python3 tools/e1s/test_e1s_menu.py
+          python3 tools/e1s/test_e1s_menu_ui.py
+
+      - name: Menu QEMU smoke test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-system-arm
+          sh shim/e1s-menu/build-qemu.sh
+          python3 tools/e1s/test_e1s_menu_qemu.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |

@@ -396,7 +396,9 @@ The probe prints `CurrentEL`, `SCTLR_EL1`, `CNTFRQ_EL0`, `MPIDR_EL1`, and
 
 The XNU loader draws its own 1080x2340 screen before it copies the payload.
 The layout is in `shim/e1s-xnu/ui.c`; `tools/e1s/ui_preview.c` renders the
-same code on the host for inspection. It is not the QEMU probe screen.
+same code on the host for inspection. It is not the QEMU probe screen. The
+current style is a plain firmware text dump rather than a dashboard: black
+background, no accent bars, and the same rows of values.
 
 - header: `Galaxy S24`, `SM-S921B / e1s / Exynos 2400`, XNU version
 - device panel: SM-S921B, Exynos 2400 (S5E9945), 10-core, Xclipse 940,
@@ -416,8 +418,21 @@ test: a red/blue swap means the channel order is not XRGB8888.
 
 The image is not padded to the 64 MiB BOOT partition. The v4 header carries
 `kernel_size`; the current image is 16,388,112 bytes. It is a new loader plus
-the XNU payload, not a patched copy of the stock `boot.img`. The screen has not
-yet been observed on the phone.
+the XNU payload, not a patched copy of the stock `boot.img`. The current
+loader Image is 118,784 bytes, SHA-256
+`132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5`. The
+screen has not yet been observed on the phone.
+
+`shim/e1s-menu/` uses the same layout for a stock-kernel chainloader. It embeds
+the dumped Linux 6.1.93 kernel at `+0x200000`, reserves the stock kernel's full
+`image_size`, and draws the device, handoff and kernel panels, a five-second
+countdown, the nine stages, and the colour/grey test. During the countdown the
+last row is `wait Jump to Android`; it becomes `ok` at zero, just before the
+jump. The auto variant never reads the volume key and boots Android after five
+seconds; the menu variant reads `0x12850064` bit 0 (the derived ALIVE GPIO
+address) and can reset for recovery or download. The combined variant places
+the XNU loader at `+0x2a00000`, after the stock BSS. None of these images has
+run on the phone.
 
 ## 3. Probe design
 

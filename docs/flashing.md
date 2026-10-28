@@ -1,15 +1,17 @@
-# First BOOT-only XNU handoff test
+# First BOOT-only tests
 
-This is the only flash authorized for the e1s bring-up phase. It writes
+These are the only flashes authorized for the e1s bring-up phase. They write
 **BOOT** and nothing else.
 
 Do not flash BL, AP, CP, CSC, USERDATA, EFS, persist, modem, or the GPT.
 Do not repartition or erase NAND.
 
-The image under test is the experimental XNU handoff, **not** an iOS boot.
-A successful run proves that S-Boot accepted the image, the loader selected a
-RAM window, copied the payload, built `boot_args` and jumped to XNU. It does
-not prove that userland starts.
+The first test is the stock-kernel boot screen: it keeps the phone's own
+Linux kernel and should boot Android after five seconds. The XNU handoff is a
+separate image and the next test. Neither image is an iOS boot. A successful
+XNU run proves that S-Boot accepted the image, the loader selected a RAM
+window, copied the payload, built `boot_args` and jumped to XNU. It does not
+prove that userland starts.
 
 ## 1. Record the exact device state
 
@@ -85,7 +87,59 @@ Stop and do not flash if any of these is true:
 - TWRP rebooted during the dump or hash read
 - you do not have the exact-build stock firmware and Odin available
 
-## 3. Build and verify the XNU handoff image
+## 3. Build and verify the stock-kernel boot screen
+
+This is the safer first image. It uses the stock `boot.img` dumped from the
+phone and keeps the stock Linux 6.1.93 kernel at `+0x200000`; the stub draws
+the same 1080x2340 screen and then jumps to the stock kernel. The auto-boot
+variant (`--no-menu`) never reads the volume-key register and boots Android
+after five seconds. The menu variant reads `0x12850064` bit 0 (the same derived
+ALIVE GPIO address as the XNU driver) and offers Android, Recovery and
+Download; that read has not been measured on the phone.
+
+```sh
+cd shim/e1s-menu && bash build.sh && cd ../..
+python3 tools/e1s/mkmenu.py \
+  --stock-boot /path/to/boot-stock.img \
+  --stub shim/e1s-menu/out/Image \
+  --output out/e1s-boot-android.img --no-menu --tar
+python3 tools/e1s/verify_boot.py out/e1s-boot-android.img --menu \
+  --tar out/e1s-boot-android.img.tar
+```
+
+For the menu image, omit `--no-menu` and use
+`--output out/e1s-boot-menu.img`. For the combined image, add
+`--xnu-boot out/e1s-boot-touch.img` and use
+`--output out/e1s-boot-menu-xnu.img`.
+
+The verifier must print `ok`. It checks the stock v4 header, the 2 MiB-aligned
+stock kernel, `stock_image_size`, the zeroed gap before any XNU loader, the
+stub's `image_size`, the menu config, and the 64 MiB BOOT headroom.
+
+This build produced:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-menu/out/Image` | 131,160 | `7c5031c5fe533d1b17fa40ddf7dc7fc68d8f5a898424f37733a888371e68a9da` |
+| `out/e1s-boot-android.img` | 39,743,504 | `8454079ebd7c3c3b2c2eaf567efa690c64cbaa45ba4d2dbec9f729ffee7fb42d` |
+| `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
+| `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
+| `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `733872985aa0cf649b7dcfe2a144cc9019339117ecbc05a1e8cbb146014a314a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `fe4f26d2abab3322bf53434185b593e35ec5eab85cb5d28713db015b4ce18f71` |
+
+The stock kernel is 37,640,704 bytes with `image_size` 40,173,568; the stub's
+header reserves 42,270,720 bytes (0x2850000), so S-Boot places the DTB after
+the stock BSS. The combined image places the XNU loader at `0x2a00000`, after
+the stock BSS, and has 6,680,560 bytes of BOOT headroom. The stock boot image
+used here is SHA-256
+`4a82a9c572b584fc35d6c6bb1d1ecb0142941a1dbbeb60583c7ca83d36bfd185`.
+
+No image in this section has been flashed. The host renders are
+`out/e1s-s24-boot-android.png` and `out/e1s-s24-menu-menu.png`; they are not
+phone captures.
+
+## 4. Build and verify the XNU handoff image
 
 The kernel is built from the HackiOS iOS 16.5 base plus the e1s patches:
 
@@ -167,10 +221,12 @@ This build's SHA-256 values:
 
 - `mach.development.e1s`:
   `fde5c6f7ab55c0eebae12e8a54e399811b0d5490fbe30e55f8ae792dbd767d68`
+- `shim/e1s-xnu/out/Image`:
+  `132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5`
 - `e1s-boot-touch.img`:
-  `b4aced0e7374027f6252fcf93444f4199ba9c7647517981fc36adb68a9d469b9`
+  `45c59a9bcba91cb36349ae5e2f46b251910cc4ad859b7da616158c2334e12e45`
 - `e1s-boot-touch.img.tar`:
-  `8d1902340f2a93ce464084c7e4c677e0da94e902d716ac747d41c4d8cc8de7e0`
+  `92be1b03136835b78c73909e3225a140e038f69b081381762ecd43f8448c7507`
 
 The kernel payload at `0x1d000` now includes `0007` (ACPM/PMIC), `0008`
 (MAX77775 battery), `0009` (RTC calendar), `0010` (display state) and `0011`
@@ -195,44 +251,62 @@ line does not include `e1scam`, so the camera code is not run and no camera
 pad or register is touched. Enable it in a later test build with `e1scam=1`
 (pads/I2C) or `e1scam=2` (also CSIS registers).
 
-## 4. Flash only BOOT
+## 5. Flash only BOOT
 
 1. Boot the phone into download mode.
 2. Open Odin.
-3. Put `out/e1s-boot-touch.img.tar` in **AP**.
+3. Put the image you are testing in **AP**:
+   - `out/e1s-boot-android.img.tar` for the stock-kernel screen with no key
+     read (the first test);
+   - `out/e1s-boot-menu.img.tar` for the stock-kernel volume-up menu;
+   - `out/e1s-boot-menu-xnu.img.tar` for the combined menu and XNU loader;
+   - `out/e1s-boot-touch.img.tar` for the XNU handoff only.
 4. Leave **BL**, **CP**, **CSC**, and **USERDATA** empty.
 5. Disable repartition and NAND erase.
 6. Connect the phone, wait for the COM indicator, then Start.
 7. Do not disconnect until Odin reports success.
 
-The loader clears the screen and draws a 1080x2340 boot screen: `Galaxy S24`,
-`SM-S921B / e1s / Exynos 2400`, a device panel, the live handoff values
-(S-Boot, EL1, GIC, framebuffer, RAM window, payload, ADT, entry), the XNU
-command line, a kernel-load progress bar, the boot-stage checklist, and a
+The stock-kernel images draw the same 1080x2340 screen and then jump to the
+stock kernel at `+0x200000`; Android should boot. The menu image waits for a
+volume-up press during the five-second countdown and then shows Android,
+Recovery and Download. The auto-boot image never reads the key register. The
+menu timeout is ten seconds and defaults to Android. Selecting Recovery or
+Download resets through PSCI and asks you to hold the S-Boot key combination:
+Volume Up + Power for recovery, or Volume Up + Volume Down with USB for
+download. Those combinations are not verified on `e1s`.
+
+The XNU loader clears the screen and draws its 1080x2340 boot screen:
+`Galaxy S24`, `SM-S921B / e1s / Exynos 2400`, a device panel, the live handoff
+values (S-Boot, EL1, GIC, framebuffer, RAM window, payload, ADT, entry), the
+XNU command line, a kernel-load progress bar, the boot-stage checklist, and a
 colour bar at the bottom. `e1s.hold=5` keeps the finished screen up for five
 seconds before `JUMP TO XNU`. The live handoff values are also written to the
 `0x91200000` log.
 
-After the jump, XNU should print its early console and then `bsd_init` calls
-`e1s_pmic_init()` before the input driver. Expect `e1s-acpm:` lines describing
-the APM channel table, then `e1s-pmic:` chip IDs, status and RTC. If the mailbox
-or firmware layout differs, these lines stop with a printed reason and the boot
-continues.
+For the XNU images, after the jump, XNU should print its early console and
+then `bsd_init` calls `e1s_pmic_init()` before the input driver. Expect
+`e1s-acpm:` lines describing the APM channel table, then `e1s-pmic:` chip IDs,
+status and RTC. If the mailbox or firmware layout differs, these lines stop
+with a printed reason and the boot continues.
 
-Next comes the UFS summary from `e1s_ufs_probe()` (CAP, HCS/HCE, `MEM_CFG`
-legacy/MCQ mode, and queue 0 state), then `e1s-battery:` from the MAX77775
-fuel gauge. The first image has no `rd=ufsroot0`, so the expected end of this
-test is a missing-root stop after those summaries, not iOS boot. The UFS
-summary is register evidence, not a UFS command test. The camera probe is not
-called because `e1scam` is absent.
+For the XNU image, next comes the UFS summary from `e1s_ufs_probe()` (CAP,
+HCS/HCE, `MEM_CFG` legacy/MCQ mode, and queue 0 state), then `e1s-battery:`
+from the MAX77775 fuel gauge. The first image has no `rd=ufsroot0`, so the
+expected end of this test is a missing-root stop after those summaries, not
+iOS boot. The UFS summary is register evidence, not a UFS command test. The
+camera probe is not called because `e1scam` is absent.
 
-Photograph the loader screen during the five-second hold, then photograph the
-XNU console after at least 60 seconds. Record whether:
+For the stock-kernel image, photograph the boot screen and then whether
+Android reaches the lock screen. For the XNU image, photograph the loader
+screen during the five-second hold, then the XNU console after at least 60
+seconds. Record whether:
 
-- the loader screen appears at all (if not, the framebuffer address or the
+- the boot screen appears at all (if not, the framebuffer address or the
   boot image is wrong);
 - the colour bars are correct (a red/blue swap means the framebuffer channel
   order is not XRGB8888);
+- the stock image boots Android, and whether the menu appears after a
+  volume-up press;
 - the screen changes after `JUMP TO XNU` (XNU took over the video console);
 - the `e1s-acpm:` and `e1s-pmic:` lines appear, and what the channel dump and
   chip IDs say;
@@ -243,25 +317,31 @@ XNU console after at least 60 seconds. Record whether:
 A black screen is a failure even if the log can be read. Do not describe the
 test as a boot without a screen photo.
 
-If the console stops inside `e1s-acpm` or `e1s-pmic`, rebuild the same image
-with `e1spmic=0 e1sbattery=0` added to both `--cmdline` arguments. That leaves
-the PMIC and fuel-gauge code compiled but not run, and isolates the display,
-UFS and touch path. The same image can then be flashed again without changing
-anything else.
+For the XNU image, if the console stops inside `e1s-acpm` or `e1s-pmic`,
+rebuild the same image with `e1spmic=0 e1sbattery=0` added to both `--cmdline`
+arguments. That leaves the PMIC and fuel-gauge code compiled but not run, and
+isolates the display, UFS and touch path. The same image can then be flashed
+again without changing anything else.
 
-## 5. Recover the RAM log
+## 6. Recover the RAM log
 
 Samsung's `sec_debug_next` reservation is 2 MiB at physical `0x91200000`.
-Two records live there:
+The records can include:
 
-- the loader's ASCII log (`E1SXNU01`) at the base, with the final
+- the stock-kernel stub's ASCII log (`E1SMENU1`) at the base, with the menu or
+  auto-boot decision;
+- the XNU loader's ASCII log (`E1SXNU01`) at the base, with the final
   `JUMP TO XNU` marker;
 - the XNU console ring (`E1SXNU02`) at `0x91300000`, in the second MiB. Once
   `bsd_init` installs it, every character that reaches `_cnputs` is mirrored
   there, including the display probe, PMIC/ACPM, UFS and panic output. Earlier
   kernel output is not captured.
 
-Dump the whole 2 MiB so both records are included:
+The stock-kernel log is written before the jump to Android. Android may reuse
+the `sec_debug_next` region after boot, so take the screen photo first and do
+not treat a missing menu log as proof that the stub did not run.
+
+Dump the whole 2 MiB so every record is included:
 
 ```sh
 adb shell "dd if=/dev/mem of=/sdcard/e1s-log.bin bs=4096 skip=594432 count=512"
@@ -270,12 +350,12 @@ python3 tools/e1s/read_log.py e1s-log.bin
 ```
 
 `594432 * 4096` is `0x91200000`; 512 blocks is 2 MiB. `read_log.py` prints the
-loader record first and then the XNU ring, unwrapped if it has wrapped.
+loader/menu record first and then the XNU ring, unwrapped if it has wrapped.
 If `/dev/mem` is blocked by the recovery kernel, use the screen photograph and
 record that the log could not be read. Do not attempt to write to `/dev/mem`.
 `e1slog=0` disables the XNU ring for a comparison boot.
 
-## 6. Restore BOOT
+## 7. Restore BOOT
 
 If the loader does not run, or after the screen and log are captured:
 

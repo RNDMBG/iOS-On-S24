@@ -863,3 +863,64 @@ byte-patched stock `boot.img`.
 All thirteen host checks, the new UI render test, and the QEMU nographic smoke
 test pass. No phone flash, no phone screen, and no device test. The boot screen
 is unobserved on hardware; the preview only proves the drawing code.
+
+## 2026-10-28 - stock-kernel boot screen and menu
+
+The XNU loader screen was simplified to a plain text dump: the device panel,
+live handoff values, XNU command line, progress bar, nine-stage checklist,
+colour bars, and 16-step grey ramp are unchanged, but the accent bars and
+dashboard styling are gone. The new loader Image is `132ac43d...`; the XNU
+images are `45c59a9b...` and `bae184aa...`. These values replace the
+2026-10-27 values for the current files.
+
+`shim/e1s-menu/` adds a stock-derived chainloader. It embeds the user's dumped
+`boot-stock.img` kernel at `+0x200000`, reserves the kernel's full
+`image_size` (0x2650000) in the stub's arm64 header, draws the same 1080x2340
+screen, and jumps to the stock kernel entry. The stub's own `image_size` is
+0x2850000 for the safe images, so S-Boot places the DTB after the stock BSS.
+The combined image places the XNU loader at `+0x2a00000`, after the BSS, and
+has 6,680,560 bytes of BOOT headroom. The splash leaves `Jump to Android` as
+`wait` until the countdown reaches zero; the other eight rows are `ok`.
+
+The menu config is at `+0x20000`. Its `flags` bit 0 enables the volume-key
+menu. The auto image clears that bit and never reads the key; it waits five
+seconds and boots Android. The menu image sets it, reads `0x12850064` bit 0
+during the countdown, and opens Android / Recovery / Download on volume-up.
+The menu timeout is ten seconds and defaults to Android. Recovery and Download
+reset through PSCI and ask the user to hold the S-Boot key combination:
+Volume Up + Power for recovery, Volume Up + Volume Down with USB for download.
+Those combinations are not verified on `e1s`.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-menu/out/Image` | 131,160 | `7c5031c5fe533d1b17fa40ddf7dc7fc68d8f5a898424f37733a888371e68a9da` |
+| `out/e1s-boot-android.img` | 39,743,504 | `8454079ebd7c3c3b2c2eaf567efa690c64cbaa45ba4d2dbec9f729ffee7fb42d` |
+| `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
+| `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
+| `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `733872985aa0cf649b7dcfe2a144cc9019339117ecbc05a1e8cbb146014a314a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `fe4f26d2abab3322bf53434185b593e35ec5eab85cb5d28713db015b4ce18f71` |
+
+The stock boot image is SHA-256
+`4a82a9c572b584fc35d6c6bb1d1ecb0142941a1dbbeb60583c7ca83d36bfd185`;
+its kernel is 37,640,704 bytes, SHA-256
+`fdebf07815335253ac3113674ccb1afaee71da42c3d15227a23f1ea1a3a03789`,
+with `image_size` 0x2650000. The stock v4 header is kept, including
+`os_version` 0x1c000198 and the empty command line; only `kernel_size` and
+`ramdisk_size` are changed. The verifier checks the stock header, the 2 MiB
+placement, the zeroed BSS gap before XNU, the menu config, the XNU loader when
+present, and the BOOT headroom.
+
+Host checks: all sixteen tests pass, including the menu packer/verifier test
+and the three-screen UI render test. The QEMU menu test builds the real stub
+with a synthetic stock kernel, waits five seconds, validates the embedded
+kernel, cleans the cache, jumps to it, and sees `E1S MENU JUMP`. The
+freestanding QEMU probe test still passes. The QEMU test does not execute the
+Samsung stock kernel.
+
+No image has been flashed, no phone screen has been seen, and Android booting
+from this chainloader is not proven. The auto image is the first test because
+it avoids the derived key register. The key-menu image remains experimental;
+the combined image also contains the untested XNU loader. An unlocked
+bootloader is required; a custom BOOT can trip Knox. The stock BOOT restore tar
+is at `C:\Users\asser\s24-backup\boot-stock-restore.tar`.
