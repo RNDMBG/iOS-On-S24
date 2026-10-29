@@ -983,7 +983,8 @@ contains no Apple binaries.
 
 Added `tools/e1s/mkstage0.sh` and a host test for the ADT rebase. The test
 compiles `adt_patch.c`, patches a generated ADT with a `RAMDisk` property, and
-checks positive and negative deltas plus the no-RAMDisk case. All seventeen
+checks positive and negative deltas plus the no-RAMDisk case. A second test
+checks the payload's RAMDisk segment, address, and ADT property. All eighteen
 host checks pass.
 
 | File | Size | SHA-256 |
