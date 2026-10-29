@@ -294,12 +294,13 @@ tree. From `e1s_eur_openx_w01_r13.dts`:
 | --- | --- | --- |
 | SPI controller | `spi_9` at `0x11090000` | DTS `s5e9945-usi.dtsi` |
 | USI select | `usi_9` at `0x11022040` | DTS `s5e9945-usi.dtsi` |
-| IRQ | `gpa1-2` | DTS board file |
+| IRQ | `gpa1-2`, GIC SPI 10 / INTID 42 | DTS board file, `s5e9945-pinctrl.dtsi` |
 | CS | `gpp9-3` | DTS board file |
 | SPI clock | 10 MHz | DTS board file |
 | Coordinate range | 4096 x 4096 | DTS board file |
 | Firmware | `tsp_stm/fts2ba61y_e1s.bin`; later revision `fts2ba61c_e1.bin` | DTS board file |
 | Interrupt type | `FUNC_INPUT_WAKEUP`, no pull | DTS board file |
+| EINT trigger | Level-low, active-low line | STM driver convention; unverified |
 
 The STM driver in `drivers/input/sec_input/stm_spi/` expects firmware download
 and a large vendor protocol. It is not a generic SPI HID device. A minimal XNU
@@ -313,10 +314,25 @@ before attempting the full touch stack.
 
 | Register | Offset | Meaning |
 | --- | --- | --- |
-| CON | `+0x00` (`+0x04` for pins 8-15) | 4 bits per pin; 0 input, 1 output, 2+ alternate |
+| CON | `+0x00` (`+0x04` for pins 8-15) | 4 bits per pin; 0 input, 1 output, 0xf EINT |
 | DAT | `+0x04` | 1 bit per pin |
 | PUD | `+0x08` | 4 bits per pin; 0 none, 1 down, 2 up |
 | DRV | `+0x0c` | 4 bits per pin |
+| EINT CON | `+0x700 + 0x04` | 4 bits per pin; 0 level-low, 1 level-high, 2 falling, 3 rising, 4 both |
+| EINT FLTCON | `+0x800 + 0x08` | digital filter |
+| EINT MASK | `+0x900 + 0x04` | 1 = masked |
+| EINT PEND | `+0xa00 + 0x04` | write 1 to clear |
+
+The bank offsets above are `gpa1`'s: `eint_offset` 0x04 and `fltcon_offset`
+0x08 in `s5e9945_pin_alive`. `gpa1-2` is a direct wakeup EINT line, not muxed:
+the pinctrl DTS gives `gpa1` `GIC_SPI EXT_INTA1_OUT0..7`, and
+`EXT_INTA1_OUT2` is 10, so the GIC INTID is 42. `0003` programs function 0xf,
+level-low, no pull, clears PEND, unmasks EINT, and attaches SPI 42 as a
+level interrupt. The handler masks the SPI until the thread has drained the STM
+events, then acks PEND and unmasks. If the attach fails, the driver keeps the
+4 ms polling loop. Neither the INTID nor the trigger has been observed on the
+phone; `e1stouch_irq=0` forces polling and `e1stouch_irq_spi=N` overrides the
+INTID for a test image.
 
 SPI9 bus pins in the DTS are `gpp9-2`, `gpp9-1`, `gpp9-0`; CS is `gpp9-3`.
 The USI09 pad order is assumed to be `gpp9-2 = CLK`, `gpp9-1 = MOSI`,
@@ -474,12 +490,13 @@ switching. USB is not part of the first key/display milestone.
 1. The volume-up driver can be self-contained: map ALIVE, read `0x12850064`
    bit 0 every 20 ms, debounce two consecutive samples, and call
    `sweet_hid_key(1, down)`.
-2. The driver must not touch the PMIC or reconfigure the pin. S-Boot already
-   configured the pull-up and EINT mux.
+2. The volume-up driver must not touch the PMIC or reconfigure the pin. S-Boot
+   already configured the pull-up and EINT mux.
 3. Power and volume-down need ACPM mailbox/SRAM initialization plus the PMIC
    register map. That is a separate milestone.
-4. Touch needs the USI/SPI controller, the STM firmware protocol, and the
-   `gpa1-2` interrupt. A read-only chip-ID probe is the sensible first step.
+4. Touch needs the bit-banged SPI9 pins, the STM firmware protocol, and the
+   `gpa1-2` EINT on GIC SPI 42. `0003` attaches it with a polling fallback; the
+   read-only chip-ID probe is still the first hardware test.
 5. Display can start from the boot framebuffer; DECON/DSIM work is only needed
    once iOS wants to own modes, page flips, or panel power.
 6. Camera capture needs the PMIC rails, the camera CMU/MCLKs, the `pd_csis`

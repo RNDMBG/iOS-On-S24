@@ -924,3 +924,40 @@ it avoids the derived key register. The key-menu image remains experimental;
 the combined image also contains the untested XNU loader. An unlocked
 bootloader is required; a custom BOOT can trip Knox. The stock BOOT restore tar
 is at `C:\Users\asser\s24-backup\boot-stock-restore.tar`.
+
+## 2026-10-29 - touch EINT on GIC SPI 42
+
+`0003` now routes `gpa1-2` instead of only polling it. The pinctrl DTS gives
+`gpa1` the direct wakeup lines `GIC_SPI EXT_INTA1_OUT0..7`; `EXT_INTA1_OUT2` is
+10, so the GIC INTID is 42. The driver programs the pin as EINT function 0xf,
+level-low, no pull, using the ALIVE bank offsets `+0x704` (EINT CON), `+0x904`
+(EINT MASK) and `+0xa04` (EINT PEND). It attaches SPI 42 as a level interrupt;
+the handler masks the SPI, sets a pending flag and wakes the touch thread. The
+thread drains up to 31 STM events, acks the EINT pending bit and unmasks the
+SPI. A 20 ms wait timeout keeps the old polling path as a fallback, and
+`e1stouch_irq=0` disables the attach. `e1stouch_irq_spi=N` overrides the INTID
+for a diagnostic image.
+
+The full `0001`-`0011` series was applied to a fresh `~/e1s-build/irq` tree.
+`e1s_touch.o` compiled and the kernel linked at 16,244,472 bytes; the build
+still stops only in `check_all_exports`. The one-CPU and SMP payloads were
+regenerated, and the combined menu image was repacked around the new XNU image.
+The loader Image is unchanged.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,244,472 | `461ed5834d3d16a941316892991d24355709d17c84f2c4250077819263385196` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `09bf736636423223617bb8c58f2a46600e75138af328de833c700756a4189b11` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `11b2f4575b51991dbb01b1b9d0db3fe65d61d1c4bd83f311fcd364bb5be64f5d` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `6b4ea12ac5ab866ae2bcded065258ccd9337322981895780c789c2e7d0c47b45` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `685eba24a6cb0027aff857963468ffc2d14d59b185927d11c6a11367ec0d1858` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `1dd97ac535ef193f57903654bc77ffb3e6e630d67079bae5a3d41b142cb23297` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `1d29c2e20bc2dedeac72e9e4adb388a6d0631b2284a0316a263c92572a258809` |
+
+The kernel hash depends on the absolute build path because the path is embedded
+in the binary; these values are from `~/e1s-build/irq`. All sixteen host checks
+pass. The QEMU checks were not rerun locally because `qemu-system-aarch64` is
+not installed in WSL; CI runs them. No image has been flashed, no phone screen
+has been seen, and the INTID, EINT trigger, GIC delivery, and touch rails are
+still unverified on hardware. If the IRQ path is wrong, `e1stouch_irq=0`
+returns to the 4 ms polling loop.

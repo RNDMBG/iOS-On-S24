@@ -19,7 +19,7 @@ what has replaced it so far.
 | Interrupts | GIC-400 | GICv3, GICD/GICR | reads IDs only; no init |
 | Timer | 26 MHz | 25.6 MHz | prints `CNTFRQ_EL0`; no init |
 | Display | 1440x2960 | 1080x2340 `s6e3fae` | writes S-Boot FB; DECON/DSIM state probe, untested (`0010`) |
-| Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, untested |
+| Touch | S6SY761 | STM SPI9 | e1s bit-bang + STM driver, GIC IRQ fallback, untested |
 | Storage | older UFS | S5E9945 UFS 4.0 | read-only driver, untested |
 | Cameras | Qualcomm CSI | Exynos CSIS/ISP, 4 sensors | presence probe, untested |
 | RTC | S2MPS17 | S2MPS27/28 PMIC set | S2MPS27 RTC read + calendar epoch, untested (`0007`/`0009`) |
@@ -59,7 +59,7 @@ What is e1s-specific so far:
 | --- | --- | --- |
 | Machine config, 10 CPUs, 4 clusters | `0001` | builds |
 | Redwood hardware gating, volume-up | `0002` | builds |
-| STM SPI9 touch | `0003` | builds, untested |
+| STM SPI9 touch | `0003` | builds, untested; GIC SPI 42 IRQ with polling fallback |
 | UFS 4.0/MCQ read-only root | `0005` | builds, untested |
 | Camera presence probe | `0006` | builds, untested |
 | ACPM mailbox, PMIC reads, power key | `0007` | builds, untested |
@@ -297,9 +297,13 @@ pixels.
 
 - Volume-up: `gpa3-0`, active-low GPIO key.
 - Power: managed through the PMIC; no AP GPIO key node.
-- Touch: STM `stm_ts_spi` on SPI9, 10 MHz, IRQ `gpa1-2`, CS `gpp9-3`,
-  firmware `tsp_stm/fts2ba61y_e1s.bin` (or `fts2ba61c_e1.bin` for a later
-  revision). Rails are L18 (I/O) and L9 (AVDD) on the PMIC.
+- Touch: STM `stm_ts_spi` on SPI9, 10 MHz, IRQ `gpa1-2` (GIC SPI 10 /
+  INTID 42), CS `gpp9-3`, firmware `tsp_stm/fts2ba61y_e1s.bin` (or
+  `fts2ba61c_e1.bin` for a later revision). Rails are L18 (I/O) and L9 (AVDD)
+  on the PMIC. `0003` programs the EINT function, level-low, no pull; it
+  attaches SPI 42 as level, masks it in the handler, and unmasks after the
+  thread drains the STM. The 4 ms polling loop remains the fallback, and
+  `e1stouch_irq=0` forces it. The INTID and trigger are not hardware-verified.
 
 ### ACPM and PMIC
 

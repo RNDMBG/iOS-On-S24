@@ -12,23 +12,32 @@ index f8daa11..c336b4d 100644
  bsd/dev/redwood_goodix.c	standard
 diff --git a/bsd/dev/e1s_touch.c b/bsd/dev/e1s_touch.c
 new file mode 100644
-index 0000000..a6aa6d5
+index 0000000..228fb31
 --- /dev/null
 +++ b/bsd/dev/e1s_touch.c
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,443 @@
 +#include <kern/clock.h>
++#include <kern/sched_prim.h>
 +#include <kern/thread.h>
 +#include <libkern/libkern.h>
++#include <os/atomic_private.h>
 +#include <pexpert/pexpert.h>
 +#include <sys/redwood_input.h>
 +#include <sys/systm.h>
 +
 +extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern kern_return_t gic_v3_spi_attach(uint32_t intid, bool edge,
++    void (*handler)(void *context, uint32_t intid), void *context);
++extern void gic_v3_spi_mask(uint32_t intid);
++extern void gic_v3_spi_unmask(uint32_t intid);
 +
 +#define E1S_ALIVE_GPIO          0x12850000UL
 +#define E1S_GPA1_CON            (E1S_ALIVE_GPIO + 0x20)
 +#define E1S_GPA1_DAT            (E1S_ALIVE_GPIO + 0x24)
 +#define E1S_GPA1_PUD            (E1S_ALIVE_GPIO + 0x28)
++#define E1S_GPA1_EINT_CON       (E1S_ALIVE_GPIO + 0x704)
++#define E1S_GPA1_EINT_MASK      (E1S_ALIVE_GPIO + 0x904)
++#define E1S_GPA1_EINT_PEND      (E1S_ALIVE_GPIO + 0xa04)
 +
 +#define E1S_PERIC1_GPIO         0x11030000UL
 +#define E1S_GPP9_CON            (E1S_PERIC1_GPIO + 0xe0)
@@ -41,12 +50,16 @@ index 0000000..a6aa6d5
 +#define E1S_SPI_MISO_PIN        0
 +#define E1S_SPI_CS_PIN          3
 +#define E1S_TOUCH_IRQ_PIN       2
++#define E1S_TOUCH_GIC_SPI       42U
++#define E1S_IRQ_POLL_US         20000U
 +
 +/* Samsung pinctrl: CON field 0 = input, 1 = output; PUD 0 none, 2 pull-up */
 +#define E1S_GPIO_INPUT          0U
 +#define E1S_GPIO_OUTPUT         1U
++#define E1S_GPIO_FUNC_EINT      0xfU
 +#define E1S_PUD_NONE            0U
 +#define E1S_PUD_UP              2U
++#define E1S_EINT_LEVEL_LOW      0U
 +
 +/* STM commands (stm_reg.h, CONFIG_TOUCHSCREEN_STM_SPI path) */
 +#define STM_READ_ONE_EVENT      0x87
@@ -75,6 +88,9 @@ index 0000000..a6aa6d5
 +static uint32_t e1s_poll_us = 4000;
 +static uint32_t e1s_halfbit = 400;
 +static uint32_t e1s_flip;
++static uint32_t e1s_irq_spi = E1S_TOUCH_GIC_SPI;
++static uint32_t e1s_irq_intid;
++static uint32_t e1s_irq_pending;
 +static uint32_t last_x[STM_MAX_FINGERS], last_y[STM_MAX_FINGERS];
 +static uint32_t down[STM_MAX_FINGERS];
 +
@@ -129,6 +145,39 @@ index 0000000..a6aa6d5
 +pin_get(vm_offset_t dat, unsigned pin)
 +{
 +	return (gpio_rd(dat) >> pin) & 1U;
++}
++
++static void
++e1s_touch_eint_ack(void)
++{
++	gpio_wr(E1S_GPA1_EINT_PEND, 1U << E1S_TOUCH_IRQ_PIN);
++}
++
++static void
++e1s_touch_eint_init(void)
++{
++	uint32_t shift = E1S_TOUCH_IRQ_PIN * 4U;
++	uint32_t con;
++
++	pin_function(E1S_GPA1_CON, E1S_TOUCH_IRQ_PIN, E1S_GPIO_FUNC_EINT);
++	pin_pull(E1S_GPA1_PUD, E1S_TOUCH_IRQ_PIN, E1S_PUD_NONE);
++
++	con = gpio_rd(E1S_GPA1_EINT_CON);
++	con &= ~(0xFU << shift);
++	con |= E1S_EINT_LEVEL_LOW << shift;
++	gpio_wr(E1S_GPA1_EINT_CON, con);
++
++	e1s_touch_eint_ack();
++	gpio_wr(E1S_GPA1_EINT_MASK,
++	    gpio_rd(E1S_GPA1_EINT_MASK) & ~(1U << E1S_TOUCH_IRQ_PIN));
++}
++
++static void
++e1s_touch_irq_handler(void *context __unused, uint32_t intid)
++{
++	gic_v3_spi_mask(intid);
++	os_atomic_store(&e1s_irq_pending, 1, release);
++	thread_wakeup((event_t)&e1s_irq_pending);
 +}
 +
 +static inline void
@@ -281,8 +330,19 @@ index 0000000..a6aa6d5
 +{
 +	uint32_t empty = 0;
 +
-+	printf("e1s-touch: polling gpa1-2 every %u us\n", e1s_poll_us);
++	printf("e1s-touch: %s gpa1-2\n",
++	    e1s_irq_intid != 0 ? "waiting on" : "polling");
 +	for (;;) {
++		if (e1s_irq_intid != 0) {
++			assert_wait_timeout((event_t)&e1s_irq_pending,
++			    THREAD_UNINT, E1S_IRQ_POLL_US, NSEC_PER_USEC);
++			if (os_atomic_xchg(&e1s_irq_pending, 0, acquire) != 0) {
++				clear_wait(current_thread(), THREAD_AWAKENED);
++			} else {
++				thread_block(THREAD_CONTINUE_NULL);
++			}
++		}
++
 +		if (!pin_get(E1S_GPA1_DAT, E1S_TOUCH_IRQ_PIN)) {
 +			uint32_t events = 0;
 +
@@ -304,7 +364,13 @@ index 0000000..a6aa6d5
 +				empty = 0;
 +			}
 +		}
-+		delay_for_interval(e1s_poll_us, NSEC_PER_USEC);
++
++		if (e1s_irq_intid != 0) {
++			e1s_touch_eint_ack();
++			gic_v3_spi_unmask(e1s_irq_intid);
++		} else {
++			delay_for_interval(e1s_poll_us, NSEC_PER_USEC);
++		}
 +	}
 +}
 +
@@ -312,8 +378,10 @@ index 0000000..a6aa6d5
 +e1s_touch_init(void)
 +{
 +	uint32_t enabled = 1;
++	uint32_t irq_enabled = 1;
 +	uint8_t id[5] = { 0 };
 +	uint8_t info[11] = { 0 };
++	kern_return_t kr;
 +	thread_t thread;
 +
 +	if (PE_parse_boot_argn("e1stouch", &enabled, sizeof(enabled)) && enabled == 0) {
@@ -323,6 +391,12 @@ index 0000000..a6aa6d5
 +	PE_parse_boot_argn("e1stouch_poll_us", &e1s_poll_us, sizeof(e1s_poll_us));
 +	PE_parse_boot_argn("e1stouch_delay", &e1s_halfbit, sizeof(e1s_halfbit));
 +	PE_parse_boot_argn("e1stouch_flip", &e1s_flip, sizeof(e1s_flip));
++	PE_parse_boot_argn("e1stouch_irq", &irq_enabled, sizeof(irq_enabled));
++	PE_parse_boot_argn("e1stouch_irq_spi", &e1s_irq_spi, sizeof(e1s_irq_spi));
++	if (irq_enabled && (e1s_irq_spi < 32 || e1s_irq_spi >= 1020)) {
++		printf("e1s-touch: bad GIC SPI %u, polling\n", e1s_irq_spi);
++		irq_enabled = 0;
++	}
 +	if (e1s_poll_us < 500) {
 +		e1s_poll_us = 500;
 +	}
@@ -351,19 +425,32 @@ index 0000000..a6aa6d5
 +	pin_set(E1S_GPP9_DAT, E1S_SPI_CLK_PIN, false);
 +	pin_set(E1S_GPP9_DAT, E1S_SPI_MOSI_PIN, false);
 +
-+	pin_function(E1S_GPA1_CON, E1S_TOUCH_IRQ_PIN, E1S_GPIO_INPUT);
-+	pin_pull(E1S_GPA1_PUD, E1S_TOUCH_IRQ_PIN, E1S_PUD_UP);
-+
-+	printf("e1s-touch: gpp9 con=%#x dat=%#x; gpa1 con=%#x dat=%#x irq=%d\n",
++	printf("e1s-touch: gpp9 con=%#x dat=%#x; gpa1 con=%#x dat=%#x eint con=%#x mask=%#x pend=%#x\n",
 +	    gpio_rd(E1S_GPP9_CON), gpio_rd(E1S_GPP9_DAT),
 +	    gpio_rd(E1S_GPA1_CON), gpio_rd(E1S_GPA1_DAT),
-+	    pin_get(E1S_GPA1_DAT, E1S_TOUCH_IRQ_PIN));
++	    gpio_rd(E1S_GPA1_EINT_CON), gpio_rd(E1S_GPA1_EINT_MASK),
++	    gpio_rd(E1S_GPA1_EINT_PEND));
 +
 +	printf("e1s-touch: device id: %s (%02x %02x %02x %02x %02x)\n",
 +	    stm_chip_id(id), id[0], id[1], id[2], id[3], id[4]);
 +	if (stm_read_address(STM_READ_PANEL_INFO, info, sizeof(info)) == 0 &&
 +	    info[8] != 0 && info[9] != 0) {
 +		printf("e1s-touch: panel %u x %u channels\n", info[8], info[9]);
++	}
++
++	if (irq_enabled) {
++		kr = gic_v3_spi_attach(e1s_irq_spi, false, e1s_touch_irq_handler, NULL);
++		if (kr == KERN_SUCCESS) {
++			e1s_irq_intid = e1s_irq_spi;
++			e1s_touch_eint_init();
++			printf("e1s-touch: gpa1-2 on GIC SPI %u, level low\n", e1s_irq_spi);
++		} else {
++			printf("e1s-touch: GIC SPI %u attach failed %d, polling\n",
++			    e1s_irq_spi, kr);
++		}
++	} else {
++		printf("e1s-touch: interrupts disabled, polling every %u us\n",
++		    e1s_poll_us);
 +	}
 +
 +	if (kernel_thread_start(e1s_touch_thread, NULL, &thread) == KERN_SUCCESS) {

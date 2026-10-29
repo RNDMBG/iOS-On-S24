@@ -113,9 +113,11 @@ builds the real HackiOS base instead of the old SWEET series:
   `gpa3-0` (`0x12850064` bit 0).
 - `xnu/e1s/patches/0003-e1s-touch.patch`: the STM controller on SPI9.
   `gpp9-2/1/0` are clocked by hand as GPIO (the SoC's USI09 pad assignment),
-  `gpp9-3` is chip select, and `gpa1-2` is polled as the active-low interrupt.
-  The driver speaks Samsung's STM protocol (`0x87` one-event reads, `0x22`
-  device ID, `0x23` panel info) and posts to `/dev/redwood-touch`.
+  `gpp9-3` is chip select, and `gpa1-2` is the active-low EINT on GIC SPI 42.
+  The handler masks the SPI until the thread drains the events; a 20 ms
+  timeout keeps the old polling loop as a fallback. The driver speaks Samsung's
+  STM protocol (`0x87` one-event reads, `0x22` device ID, `0x23` panel info)
+  and posts to `/dev/redwood-touch`.
 - `xnu/e1s/patches/0005-e1s-ufs.patch`: a polled, read-only UFS 4.0/MCQ block
   driver. It takes over the live host S-Boot used (legacy UTRL or MCQ queue 0),
   selects a GPT partition by name and exposes `/dev/ufsroot0`. It is untested;
@@ -236,18 +238,18 @@ a load progress bar, the boot-stage checklist, and a colour bar. The
 loader removes it before passing the command line to XNU.
 
 The current image is 16,388,112 bytes against the 64 MiB BOOT partition. It is
-not padded to the partition: S-Boot uses the v4 header's `kernel_size`. The XNU
-kernel and ADT bytes are unchanged from the previous image; only the loader
-screen and the test token changed. The flash procedure is in
+not padded to the partition: S-Boot uses the v4 header's `kernel_size`. This
+build adds the `gpa1-2` touch EINT on GIC SPI 42 with polling fallback; the
+loader Image is unchanged. The flash procedure is in
 [docs/flashing.md](docs/flashing.md).
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
 | `shim/e1s-xnu/out/Image` | 118,784 | `132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `45c59a9bcba91cb36349ae5e2f46b251910cc4ad859b7da616158c2334e12e45` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `92be1b03136835b78c73909e3225a140e038f69b081381762ecd43f8448c7507` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `bae184aabfb289eb2cc8a6333c2b84d8de5c10a5a4680de0684ecdfb7a2229a4` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `e39cca6bc10454cd6e22d1f4df63d7215f3532c8fa518ec14b5f4f87797aed5e` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `09bf736636423223617bb8c58f2a46600e75138af328de833c700756a4189b11` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `11b2f4575b51991dbb01b1b9d0db3fe65d61d1c4bd83f311fcd364bb5be64f5d` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `6b4ea12ac5ab866ae2bcded065258ccd9337322981895780c789c2e7d0c47b45` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `685eba24a6cb0027aff857963468ffc2d14d59b185927d11c6a11367ec0d1858` |
 
 ### Stock-kernel boot screen and menu
 
@@ -272,8 +274,8 @@ combinations are not verified on `e1s`.
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `733872985aa0cf649b7dcfe2a144cc9019339117ecbc05a1e8cbb146014a314a` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `fe4f26d2abab3322bf53434185b593e35ec5eab85cb5d28713db015b4ce18f71` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `1dd97ac535ef193f57903654bc77ffb3e6e630d67079bae5a3d41b142cb23297` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `1d29c2e20bc2dedeac72e9e4adb388a6d0631b2284a0316a263c92572a258809` |
 
 Build the stock-kernel image with:
 

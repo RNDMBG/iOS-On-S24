@@ -9,7 +9,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | --- | --- | --- |
 | `0001-e1s-machine-config.patch` | builds | `E1S` machine config, Exynos 2400 board header, 10-CPU/4-cluster limits, cache geometry, generic-platform guards |
 | `0002-e1s-input.patch` | builds | gate redwood-only input/UFS/GPU probing; e1s volume-up GPIO key |
-| `0003-e1s-touch.patch` | builds, untested | STM controller on SPI9: bit-banged CLK/MOSI/MISO, CS `gpp9-3`, IRQ `gpa1-2`, `0x87` event reads |
+| `0003-e1s-touch.patch` | builds, untested | STM controller on SPI9: bit-banged CLK/MOSI/MISO, CS `gpp9-3`, `0x87` event reads, `gpa1-2` EINT on GIC SPI 42 with polling fallback |
 | `0004-e1s-display.patch` | reserved | no patch: HackiOS's `MiniIOMobileFramebuffer` already uses `boot_args.video`; the loader supplies it from the S-Boot DTB. The DECON/DSIM probe is `0010` |
 | `0005-e1s-ufs.patch` | builds, untested | S5E9945 UFS 4.0/MCQ read-only root device: HCI `0x17100000`, SQD `0x17140000`, GPT partition lookup, `rd=ufsroot0` |
 | `0006-e1s-camera.patch` | builds, untested | SM-S921B camera presence probe: four sensors, bit-banged I2C IDs, reset/MCLK/CSIS wiring; no capture |
@@ -18,6 +18,15 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0009-e1s-rtc.patch` | builds, untested | S2MPS27 RTC (binary fields), validated and handed to `clock_set_calendar_microtime()`; `e1srtc=0` disables the clock set |
 | `0010-e1s-display.patch` | builds, untested | framebuffer summary plus an opt-in read-only DECON0..3 / window / RDMA / DSIM0-1 / DCPHY0 dump; `e1sdisp=2` |
 | `0011-e1s-log.patch` | builds, untested | mirrors `_cnputs` output after `bsd_init` into a 1 MiB ring at `0x91300000`; dump 2 MiB at `0x91200000`; `e1slog=0` disables |
+
+### Touch (0003)
+
+`0003` also routes `gpa1-2` as GIC SPI 10 / INTID 42. It programs the EINT
+function, level-low, no pull, attaches the SPI as level, masks it in the
+handler, and unmasks after the thread has drained the STM events. A 20 ms
+timeout runs the old 4 ms polling loop as a fallback. `e1stouch_irq=0` forces
+polling and `e1stouch_irq_spi=N` overrides the INTID. The INTID, trigger, and
+GIC delivery are not hardware-verified.
 
 ### UFS (0005)
 

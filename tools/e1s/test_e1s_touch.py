@@ -28,6 +28,22 @@ def main():
         "STM_READ_PANEL_INFO     0x23",
         "STM_CUSTOM_W            0xC0",
         "STM_CUSTOM_R            0xD1",
+        "E1S_GPA1_EINT_CON       (E1S_ALIVE_GPIO + 0x704)",
+        "E1S_GPA1_EINT_MASK      (E1S_ALIVE_GPIO + 0x904)",
+        "E1S_GPA1_EINT_PEND      (E1S_ALIVE_GPIO + 0xa04)",
+        "E1S_TOUCH_GIC_SPI       42U",
+        "E1S_GPIO_FUNC_EINT      0xfU",
+        "E1S_EINT_LEVEL_LOW      0U",
+        "gic_v3_spi_attach(",
+        "gic_v3_spi_mask(",
+        "gic_v3_spi_unmask(",
+        "e1stouch_irq",
+        "e1stouch_irq_spi",
+        "assert_wait_timeout(",
+        "thread_wakeup(",
+        "e1s_touch_eint_init()",
+        "e1s_touch_eint_ack()",
+        "on GIC SPI %u, level low",
     ):
         assert needle.lower() in text.lower(), f"missing {needle!r}"
 
@@ -44,6 +60,10 @@ def main():
     assert "STM_COORD_RELEASE       3" in text
     assert "event[0] >> 6" in text
     assert "event[3] & 0x0f" in text
+    assert "gic_v3_spi_attach(e1s_irq_spi, false" in body
+    assert "e1s_irq_intid = e1s_irq_spi;" in body
+    assert "irq_enabled = 0" in body
+    assert "pin_function(E1S_GPA1_CON, E1S_TOUCH_IRQ_PIN, E1S_GPIO_INPUT)" not in body
     print("e1s touch patch: ok")
 
 
