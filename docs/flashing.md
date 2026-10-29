@@ -125,8 +125,8 @@ This build produced:
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `1dd97ac535ef193f57903654bc77ffb3e6e630d67079bae5a3d41b142cb23297` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `1d29c2e20bc2dedeac72e9e4adb388a6d0631b2284a0316a263c92572a258809` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `8a4dbb87cd24540ad5296038458720b21e1ab3d2db812dd0d085bd3ede796312` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `8380a6647a18d93553959b4a985dca430292758fd3108e82b323d0763d840c68` |
 
 The stock kernel is 37,640,704 bytes with `image_size` 40,173,568; the stub's
 header reserves 42,270,720 bytes (0x2850000), so S-Boot places the DTB after
@@ -209,6 +209,16 @@ This dump is read-only, but a read from a power-gated DPU block can hang the
 interconnect. Use it only after the default image has produced a log or a
 screen, and keep the default image as the fallback.
 
+### md0 userland variant (optional)
+
+`out/e1s-boot-md0.img` appends a 16.6 KB static Mach-O as the `md0` RAMDisk.
+XNU mounts it through `mockfs` and runs it as `/sbin/launchd`; `rd=md0` skips
+root authentication. This is a single-binary userland-path test, not an iOS
+rootfs. Build it with `tools/e1s/mkstage0.sh`; see
+[e1s-userland.md](e1s-userland.md) for the expected `BSD root: md0` and
+`SWEET userspace` lines. The command line adds `launchdsuffix=release rd=md0
+cs_enforcement_disable=1`.
+
 This build produced:
 
 | File | Size |
@@ -222,11 +232,11 @@ This build's SHA-256 values:
 - `mach.development.e1s`:
   `461ed5834d3d16a941316892991d24355709d17c84f2c4250077819263385196`
 - `shim/e1s-xnu/out/Image`:
-  `132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5`
+  `90a0ca450d1b2c3740f0693e89e059d340253298245463e2487c6fa14c5b0e33`
 - `e1s-boot-touch.img`:
-  `09bf736636423223617bb8c58f2a46600e75138af328de833c700756a4189b11`
+  `c6fa714be44e2a4601a70978df67dd97a569e3078d3d82924fbd1fa63f2805db`
 - `e1s-boot-touch.img.tar`:
-  `11b2f4575b51991dbb01b1b9d0db3fe65d61d1c4bd83f311fcd364bb5be64f5d`
+  `33c64299b330f31a89c3c7d95d67a5d5460a6ba40ee3a8f393ffa21c68385917`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`

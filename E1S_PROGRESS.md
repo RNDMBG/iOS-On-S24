@@ -942,7 +942,8 @@ The full `0001`-`0011` series was applied to a fresh `~/e1s-build/irq` tree.
 `e1s_touch.o` compiled and the kernel linked at 16,244,472 bytes; the build
 still stops only in `check_all_exports`. The one-CPU and SMP payloads were
 regenerated, and the combined menu image was repacked around the new XNU image.
-The loader Image is unchanged.
+The loader Image was unchanged in that rebuild; the `md0` work below changes
+it and repacks these images again.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
@@ -956,8 +957,47 @@ The loader Image is unchanged.
 
 The kernel hash depends on the absolute build path because the path is embedded
 in the binary; these values are from `~/e1s-build/irq`. All sixteen host checks
-pass. The QEMU checks were not rerun locally because `qemu-system-aarch64` is
-not installed in WSL; CI runs them. No image has been flashed, no phone screen
-has been seen, and the INTID, EINT trigger, GIC delivery, and touch rails are
-still unverified on hardware. If the IRQ path is wrong, `e1stouch_irq=0`
-returns to the 4 ms polling loop.
+passed at that point. The QEMU checks were not rerun locally because
+`qemu-system-aarch64` is not installed in WSL; CI runs them. No image has been
+flashed, no phone screen has been seen, and the INTID, EINT trigger, GIC
+delivery, and touch rails are still unverified on hardware. If the IRQ path is
+wrong, `e1stouch_irq=0` returns to the 4 ms polling loop.
+
+## 2026-10-29 - md0 mockfs userland path
+
+The XNU payload can now carry a `RAMDisk` image. `mkpayload.py --ramdisk`
+appends the image after the kernel and adds `/chosen/memory-map` `RAMDisk`; the
+loader copies it as the last segment. The loader already rebased
+`/chosen/dram-base`/`dram-size` to the DTB-selected window, but the baked
+`RAMDisk` physical address still pointed at the build-time fallback. Added
+`adt_rebase_ramdisk()` to move that pointer by the same delta. If the DTB
+window differs from `0xA0000000`, `md0` now lands on the copied image.
+
+For the first userland test, `tools/e1s/sweet-init.S` is assembled as a static
+ad-hoc-signed arm64 Mach-O with `mkinit.py`, packed as `md0`, and booted with
+`rd=md0`. `bsd_rooted_ramdisk()` skips `FSIOC_KERNEL_ROOTAUTH`; APFS fails on
+the raw Mach-O and `mockfs` (the last root filesystem) mounts it, resolving
+`/sbin/launchd` to the binary. The init opens `/dev/console`, prints a PID
+line, and prints a heartbeat every five seconds. This is not iOS userland and
+contains no Apple binaries.
+
+Added `tools/e1s/mkstage0.sh` and a host test for the ADT rebase. The test
+compiles `adt_patch.c`, patches a generated ADT with a `RAMDisk` property, and
+checks positive and negative deltas plus the no-RAMDisk case. All seventeen
+host checks pass.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-xnu/out/Image` | 118,784 | `90a0ca450d1b2c3740f0693e89e059d340253298245463e2487c6fa14c5b0e33` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `c6fa714be44e2a4601a70978df67dd97a569e3078d3d82924fbd1fa63f2805db` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `33c64299b330f31a89c3c7d95d67a5d5460a6ba40ee3a8f393ffa21c68385917` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `3a644925dd964dcfced683d5dce61752b28140388e0f0322e22686ebac89b260` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `e9659591741b4be5a8db8b2f3fb2f11c8f1d4565a59dcc6eb007910e485ec0b0` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `8a4dbb87cd24540ad5296038458720b21e1ab3d2db812dd0d085bd3ede796312` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `8380a6647a18d93553959b4a985dca430292758fd3108e82b323d0763d840c68` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7d9d46ff76f559d5b732750cc9cf15d4c828781f4f220b7d03437b0074faa3f8` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `fc2dc0e2fea9701699723ce2ca92c7f6ae525435487178285a7318e863f5dca5` |
+
+The `md0` image is a diagnostic, not a default. No image has been flashed and
+no phone screen or `0x91200000` dump exists, so `mockfs`, the static init, and
+the console path are unverified on hardware.

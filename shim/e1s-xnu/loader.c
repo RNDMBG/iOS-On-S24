@@ -614,7 +614,9 @@ uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	uint64_t pram_base = (win_base + win_size - 0x100000ULL) & ~(PAGE_16K - 1);
 	uint64_t pram_size = 0x80000;
 	if (adt_set_dram(adt_pa, p->adt_size, win_base, win_size) ||
-	    adt_set_pram(adt_pa, p->adt_size, pram_base, pram_size)) {
+	    adt_set_pram(adt_pa, p->adt_size, pram_base, pram_size) ||
+	    adt_rebase_ramdisk(adt_pa, p->adt_size,
+	    (int64_t)(win_base - p->phys_base))) {
 		ui_set_stage(&ui, UI_STAGE_ADT, UI_FAIL);
 		return fail("ADT memory patch failed");
 	}

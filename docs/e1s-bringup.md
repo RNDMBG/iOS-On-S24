@@ -28,7 +28,7 @@ what has replaced it so far.
 | USB | older USB | e1s USB | none |
 | Graphics | software | software only planned | none |
 | XNU | older patched tree | HackiOS iOS 16.5 base | `E1S` kernel builds; not booted |
-| iOS userland/UI | older userland | not present | none |
+| iOS userland/UI | older userland | static `md0` init path, not iOS | none |
 
 If the XNU handoff image runs, it proves only that S-Boot accepted the BOOT
 image, the loader selected a RAM window and framebuffer, the payload executed
@@ -554,7 +554,9 @@ The first success criterion is not "iOS boots"; it is:
 2. **Storage**: read-only UFS block 0 from the loader or a tiny XNU stub.
 3. **XNU entry**: load a minimal XNU/ADT payload into measured RAM and reach
    the early kernel console.
-4. **Root**: mount an HFS+ image from UFS.
+4. **Root**: mount an APFS image from UFS. The `md0`/`mockfs` static-init
+   test in [e1s-userland.md](e1s-userland.md) validates the single-binary path
+   first; this XNU tree has no HFS+ driver.
 5. **Userland**: launchd/SpringBoard with an iPhone identity.
 6. **Devices**: display, touch, keys, RTC, battery, cameras, then radios.
 

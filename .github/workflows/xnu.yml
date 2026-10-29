@@ -33,6 +33,7 @@ jobs:
       - name: Host checks
         run: |
           python3 tools/e1s/test_e1s_adt.py
+          python3 tools/e1s/test_e1s_adt_patch.py
           python3 tools/e1s/test_e1s_fdt.py
           python3 tools/e1s/test_e1s_touch.py
           python3 tools/e1s/test_e1s_keys.py

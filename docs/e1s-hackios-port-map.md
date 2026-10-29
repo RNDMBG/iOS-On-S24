@@ -88,7 +88,7 @@ Ordered by what the CPU-rendered UI needs first:
 | P0 | Framebuffer scanout | `0010` reads RDMA0's `BASEADDR_P0`. If it is not the loader's `0xFA200000`, a DECON/RDMA rebind driver is required. |
 | P1 | SMP | Code ready, untested. `mkadt.py --smp` publishes the ten MPIDRs (`0x000`..`0x900`), the loader keeps the boot MPIDR from being duplicated, and `docs/e1s-smp.md` has the `cpus=10` test image. The default image still says `cpus=1`. |
 | P1 | Panel power/backlight | `e1spmic=3` can enable LDO10/LDO17, but nothing drives the `gpc7-0` reset or the panel backlight yet. |
-| P1 | Touch interrupt | `e1s_touch.c` bit-bangs the STM bus and reads events; the `gpa1-2` IRQ is not routed to a GIC handler. |
+| P1 | Touch interrupt | `e1s_touch.c` bit-bangs the STM bus and reads events; `gpa1-2` is attached as GIC SPI 42, level-low, with a polling fallback. Untested on hardware. |
 | P2 | USB | No e1s USB device/host driver; the loader log at `0x91200000` and the XNU console ring at `0x91300000` are the only output channels today. |
 | P2 | Audio output | The generic audio queue exists; there is no e1s I2S/amplifier sink. |
 | P2 | Camera capture | `e1s_camera.c` is a presence probe; CSIS/ISP, MCLK and rails are not driven. |

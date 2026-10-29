@@ -188,6 +188,39 @@ adt_set_pram(uintptr_t adt, uint64_t size, uint64_t base, uint64_t pram_size)
 	return -1;
 }
 
+int
+adt_rebase_ramdisk(uintptr_t adt, uint64_t size, int64_t delta)
+{
+	uint32_t chosen, mmap, nprops;
+	if (!adt || size < 8 ||
+	    find_child(adt, size, 0, "chosen", &chosen) ||
+	    find_child(adt, size, chosen, "memory-map", &mmap) ||
+	    rd32(adt, size, mmap, &nprops))
+		return -1;
+	uint32_t off = mmap + 8;
+	for (uint32_t i = 0; i < nprops; i++) {
+		uint32_t len;
+		if (!in_bounds(size, off, 36) ||
+		    rd32(adt, size, off + 32, &len))
+			return -1;
+		if (prop_name_is(adt, off, "RAMDisk")) {
+			uint64_t phys;
+			if ((len & 0x7fffffffU) != 16 || (len & 0x80000000U))
+				return -1;
+			phys = *(const volatile uint64_t *)(adt + off + 36);
+			*(volatile uint64_t *)(adt + off + 36) =
+			    phys + (uint64_t)delta;
+			return 0;
+		}
+		len &= 0x7fffffffU;
+		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);
+		if (next > size)
+			return -1;
+		off = (uint32_t)next;
+	}
+	return 0;
+}
+
 static int
 node_u32_prop(uintptr_t adt, uint64_t size, uint32_t node, const char *name,
     uint32_t *value)
