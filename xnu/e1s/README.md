@@ -18,6 +18,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0009-e1s-rtc.patch` | builds, untested | S2MPS27 RTC (binary fields), validated and handed to `clock_set_calendar_microtime()`; `e1srtc=0` disables the clock set |
 | `0010-e1s-display.patch` | builds, untested | framebuffer summary plus an opt-in read-only DECON0..3 / window / RDMA / DSIM0-1 / DCPHY0 dump; `e1sdisp=2` |
 | `0011-e1s-log.patch` | builds, untested | mirrors `_cnputs` output after `bsd_init` into a 1 MiB ring at `0x91300000`; dump 2 MiB at `0x91200000`; `e1slog=0` disables |
+| `0012-e1s-boot-marker.patch` | builds, untested | pre-MMU checkpoint marker at `0x912ff000+8`; the loader writes `E1SMARK1`, XNU marks checkpoints 1-4 |
 
 ### Touch (0003)
 
@@ -215,6 +216,20 @@ PMIC/ACPM, UFS and panic output can be read back from recovery. Dump 2 MiB at
 `0x91200000` and run `tools/e1s/read_log.py`; it prints the loader record and
 the unwrapped XNU ring. `e1slog=0` turns the ring off without changing
 anything else.
+
+### Pre-MMU boot marker (0012)
+
+`0012-e1s-boot-marker.patch` adds `E1S_BOOT_MARK n` after the existing
+`LOADER_CHECKPOINT n` at checkpoints 1-4 in `osfmk/arm64/start.s`. Each writes
+`n` to `0x912ff000 + 8` while the MMU is off. The loader writes `E1SMARK1` and
+`0` to that page and cleans it before the jump. A dump with the magic but no
+console then separates "XNU never started" (0) from "XNU stopped before the
+MMU" (1-4). Checkpoint 5 runs after `SCTLR_EL1` is set, so it is not marked.
+
+The page is the last page of the first MiB of `sec_debug_next`, just before the
+`E1SXNU02` ring. `tools/e1s/read_log.py` scans for the magic and prints the
+checkpoint. The loader and kernel build, and the host test passes, but no
+marker has been read from the phone.
 
 ### SMP (optional)
 

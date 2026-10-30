@@ -242,16 +242,18 @@ The current image is 16,388,112 bytes against the 64 MiB BOOT partition. It is
 not padded to the partition: S-Boot uses the v4 header's `kernel_size`. This
 build adds the `gpa1-2` touch EINT on GIC SPI 42 with polling fallback, and the
 loader now rebases the ADT `RAMDisk` pointer when it copies the payload to a
-DTB-selected window. The flash procedure is in
+DTB-selected window. It also publishes `E1SMARK1` at `0x912ff000`; XNU writes
+1-4 there at the checkpoints before the MMU is enabled, so a dump still shows
+how far a failed boot got. The flash procedure is in
 [docs/flashing.md](docs/flashing.md).
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `shim/e1s-xnu/out/Image` | 118,784 | `90a0ca450d1b2c3740f0693e89e059d340253298245463e2487c6fa14c5b0e33` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `c6fa714be44e2a4601a70978df67dd97a569e3078d3d82924fbd1fa63f2805db` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `33c64299b330f31a89c3c7d95d67a5d5460a6ba40ee3a8f393ffa21c68385917` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `3a644925dd964dcfced683d5dce61752b28140388e0f0322e22686ebac89b260` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `e9659591741b4be5a8db8b2f3fb2f11c8f1d4565a59dcc6eb007910e485ec0b0` |
+| `shim/e1s-xnu/out/Image` | 118,784 | `1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `eb6608d40fa0acf8ae7c0682b5d0e9c2d8d60946b3767fce2f9dfb0d4426cd2f` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `58725588fcc45e936a5e7f8595805de98c1bf804d7510fcb9b2dcc27acc4eec9` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `1b68be5dd998d365548d83ee9ecbce49fbedc017196797c0db3ae42341985fa6` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `8023ffe731f28f3c5057bb60ac07e48524be4972272c5c3495725f2c60f3d4dd` |
 
 `out/e1s-boot-md0.img` is a separate diagnostic image: a 16.6 KB static Mach-O
 is appended as the `md0` RAMDisk and XNU runs it as `/sbin/launchd` through
@@ -281,8 +283,8 @@ combinations are not verified on `e1s`.
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `8a4dbb87cd24540ad5296038458720b21e1ab3d2db812dd0d085bd3ede796312` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `8380a6647a18d93553959b4a985dca430292758fd3108e82b323d0763d840c68` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `18dad876972adda2b53d13bce5152abf8e89816ae7865ce9d3e95ed38cb2de1a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `a6186a8bdfff9b7843f59a34174982f6973b6a13a9b888a12e4d813caf15b232` |
 
 Build the stock-kernel image with:
 

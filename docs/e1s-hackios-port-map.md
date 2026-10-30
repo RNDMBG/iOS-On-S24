@@ -85,6 +85,7 @@ Ordered by what the CPU-rendered UI needs first:
 
 | Priority | Piece | State |
 | --- | --- | --- |
+| P0 | XNU entry visibility | `0012` marks pre-MMU checkpoints 1-4 at `0x912ff000`; the loader log alone only proves the jump. Untested on hardware. |
 | P0 | Framebuffer scanout | `0010` reads RDMA0's `BASEADDR_P0`. If it is not the loader's `0xFA200000`, a DECON/RDMA rebind driver is required. |
 | P1 | SMP | Code ready, untested. `mkadt.py --smp` publishes the ten MPIDRs (`0x000`..`0x900`), the loader keeps the boot MPIDR from being duplicated, and `docs/e1s-smp.md` has the `cpus=10` test image. The default image still says `cpus=1`. |
 | P1 | Panel power/backlight | `e1spmic=3` can enable LDO10/LDO17, but nothing drives the `gpc7-0` reset or the panel backlight yet. |

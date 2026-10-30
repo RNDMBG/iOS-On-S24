@@ -1,0 +1,54 @@
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -636,6 +636,18 @@
+ 1:
+ .endmacro
+ 
++/*
++ * E1S bring-up: leave the checkpoint in the reserved sec_debug_next page
++ * before the MMU is enabled. The loader writes the magic at 0x912ff000.
++ */
++.macro E1S_BOOT_MARK n
++#if defined(E1S)
++	movz	x9, #0xf000
++	movk	x9, #0x912f, lsl #16
++	movz	x10, #\n
++	str	x10, [x9, #8]
++#endif
++.endm
+ 
+ 	.align 2
+ 	.globl EXT(start_first_cpu)
+@@ -646,6 +658,7 @@
+ 	mov		x20, x0
+ 	mov		x21, #0
+ 	LOADER_CHECKPOINT 1
++	E1S_BOOT_MARK 1
+ 
+ 	// Set low reset vector before attempting anything that might trap
+ 	// (under a third-party hypervisor even the OS lock write below can).
+@@ -656,6 +669,7 @@
+ 	// Unlock the core for debugging
+ 	msr		OSLAR_EL1, xzr
+ 	LOADER_CHECKPOINT 2
++	E1S_BOOT_MARK 2
+ 
+ 
+ 	// Get the kernel memory parameters from the boot args
+@@ -802,6 +816,7 @@
+ 	dsb		ish
+ 
+ 	LOADER_CHECKPOINT 3
++	E1S_BOOT_MARK 3
+ 
+ 	b		common_start
+ 
+@@ -935,6 +950,7 @@
+ 
+ 	cbnz	x21, 1f								// boot CPU cold start only
+ 	LOADER_CHECKPOINT 4
++	E1S_BOOT_MARK 4
+ 1:
+ 	// Enable caches, MMU, ROP and JOP
+ 	MOV64   x0, SCTLR_EL1_DEFAULT

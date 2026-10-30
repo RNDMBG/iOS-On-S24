@@ -57,6 +57,7 @@ the 2 MiB dump at `0x91200000`:
 - `load_init_program: attempting to load /sbin/launchd`
 - `*** SWEET userspace: init running as PID 1 ***`
 - `SWEET init: still alive` every five seconds
+- `E1SMARK1` at `0x912ff000` with value `4` (the pre-MMU checkpoints passed)
 
 If `md0` is wrong, the log shows `cannot mount root` or an exec error instead.
 A missing init line after a successful `/sbin/launchd` lookup points at the

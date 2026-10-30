@@ -16,6 +16,9 @@
 #define LOG_HEADER	16U
 #define LOG_MAX		0xff00U
 
+#define MARK_BASE	0x912ff000UL
+#define MARK_MAGIC	"E1SMARK1"
+
 #define BOOT_LINE_LENGTH 608
 #define PAGE_16K	0x4000UL
 #define XNU_RAM_BASE	0x880000000UL
@@ -69,6 +72,11 @@ static int ui_ready;
 static inline void wr32(uintptr_t a, uint32_t v)
 {
 	*(volatile uint32_t *)a = v;
+}
+
+static inline void wr64(uintptr_t a, uint64_t v)
+{
+	*(volatile uint64_t *)a = v;
 }
 
 static void log_init(void)
@@ -131,6 +139,16 @@ static void clean(uintptr_t start, uintptr_t end)
 	for (uintptr_t p = start & ~(line - 1); p < end; p += line)
 		__asm__ volatile("dc civac, %0" : : "r"(p) : "memory");
 	__asm__ volatile("dsb sy" ::: "memory");
+}
+
+static void boot_mark_init(void)
+{
+	volatile char *p = (volatile char *)MARK_BASE;
+
+	for (int i = 0; i < 8; i++)
+		p[i] = MARK_MAGIC[i];
+	wr64(MARK_BASE + 8, 0);
+	clean(MARK_BASE, MARK_BASE + 64);
 }
 
 static void fb_flush(void)
@@ -370,6 +388,7 @@ choose_window(uintptr_t dtb, uintptr_t loader_image, uint64_t loader_size,
 uint64_t loader_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	log_init();
+	boot_mark_init();
 	log_str("S24XNU LOADER (experimental e1s)\n");
 	log_str("Galaxy S24 SM-S921B e1s\n");
 	log_str("Exynos 2400 S5E9945 10-core\n");

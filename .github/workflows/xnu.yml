@@ -45,6 +45,7 @@ jobs:
           python3 tools/e1s/test_e1s_rtc.py
           python3 tools/e1s/test_e1s_display.py
           python3 tools/e1s/test_e1s_log.py
+          python3 tools/e1s/test_e1s_marker.py
           python3 tools/e1s/test_e1s_port_map.py
           python3 tools/e1s/test_e1s_smp.py
           python3 tools/e1s/test_e1s_ui.py

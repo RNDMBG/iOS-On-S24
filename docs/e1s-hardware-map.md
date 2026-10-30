@@ -31,6 +31,7 @@ DTS revision may differ on the user's firmware.
 | Boot framebuffer | `0xFA200000`, size `0x009A4000`, 1080x2340x32 | Mu-Silicium memory map |
 | Boot log | `0x91200000`, 2 MiB (`sec_debug_next`) | DTS `s5e9945-rmem.dtsi` |
 | XNU console ring | `0x91300000`, 1 MiB (second half of `sec_debug_next`) | e1s `0011` |
+| Pre-MMU boot marker | `0x912ff000`, 16 bytes, last page of `sec_debug_next` | e1s loader + `0012` |
 | Kernel log | `0xFC911000`, 2 MiB | DTS `s5e9945-rmem.dtsi` |
 | Debug header | `0xFC900000`, 64 KiB | DTS `s5e9945-rmem.dtsi` |
 
@@ -537,7 +538,7 @@ reserved-memory node uses 2 address cells and 1 size cell, so each `reg` is
 | `log_s2d` | `0xFCB11000` | `0x1E00000` | Samsung log |
 | `log_arrdumprst` | `0xFE911000` | `0x1520000` | Samsung log |
 | `log_bcm` | `0xFBC00000` | `0x00400000` | Samsung log |
-| `sec_debug_next` (board) | `0x91200000` | `0x00200000` | the loader's log space |
+| `sec_debug_next` (board) | `0x91200000` | `0x00200000` | loader log, pre-MMU marker, XNU ring |
 
 The old `0x880000000` XNU window is inside `cp_rmem`; do not use it.
 The loader picks a free gap from the live DTB and falls back to

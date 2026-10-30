@@ -424,8 +424,10 @@ The image is not padded to the 64 MiB BOOT partition. The v4 header carries
 `kernel_size`; the current image is 16,388,112 bytes. It is a new loader plus
 the XNU payload, not a patched copy of the stock `boot.img`. The current
 loader Image is 118,784 bytes, SHA-256
-`132ac43d0655af02284ffd3347791d44605a697da43c874603c04f682c8572a5`. The
-screen has not yet been observed on the phone.
+`1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba`. It
+clears an `E1SMARK1` page at `0x912ff000`; XNU writes 1-4 there before the MMU
+is enabled, so a dump shows how far the kernel got. The screen has not yet been
+observed on the phone.
 
 `shim/e1s-menu/` uses the same layout for a stock-kernel chainloader. It embeds
 the dumped Linux 6.1.93 kernel at `+0x200000`, reserves the stock kernel's full
@@ -538,7 +540,8 @@ First flash:
    or USERDATA.
 5. Let it boot the probe. Photograph the screen.
 6. Reboot to recovery and dump 2 MiB at physical `0x91200000`; the loader
-   record is at the base and the XNU console ring at `0x91300000`.
+   record is at the base, the pre-MMU marker at `0x912ff000`, and the XNU
+   console ring at `0x91300000`.
 7. Restore the stock BOOT image before any further experiment if the probe
    does not run.
 

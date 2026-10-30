@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Extract an e1s log from a physical-memory dump or /dev/mem read.
 
-Three formats exist:
+The records are:
 
   E1SPRB1  the old probe (96 KiB image), 16-byte header, text at +16
   E1SXNU01 the XNU loader, 16-byte header, length at +8
   E1SMENU1 the boot menu, 16-byte header, length at +8
   E1SXNU02 the XNU console ring at 0x91300000, 40-byte header, ring data
+  E1SMARK1 the pre-MMU boot checkpoint page at 0x912ff000, marker at +8
 
-The loader, probe, and menu records live at physical 0x91200000.  The XNU ring
-is in the second MiB of the same 2 MiB sec_debug_next reservation; dump 2 MiB
-to capture both.
+The loader, probe, and menu records live at physical 0x91200000.  The marker
+is the last page of the first MiB, and the XNU ring is in the second MiB of the
+same 2 MiB sec_debug_next reservation; dump 2 MiB to capture all of them.
 """
 import argparse
 import struct
@@ -22,6 +23,8 @@ MAX_TEXT = 0xFF00
 
 XNU_MAGIC = b"E1SXNU02"
 XNU_HEADER = 40
+
+MARK_MAGIC = b"E1SMARK1"
 
 
 def extract(data):
@@ -69,6 +72,19 @@ def extract_xnu(data):
     return at, text, seq, total
 
 
+def extract_boot_mark(data):
+    """Return (offset, value) for the E1SMARK1 page, or None.
+
+    The loader writes the magic and zero before the jump. XNU replaces the
+    value at +8 at each pre-MMU checkpoint; zero means it never reached one.
+    """
+    at = data.find(MARK_MAGIC)
+    if at < 0 or at + 16 > len(data):
+        return None
+    value, = struct.unpack_from("<Q", data, at + 8)
+    return at, value
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dump", help="raw physical-memory dump")
@@ -78,7 +94,8 @@ def main():
     data = open(args.dump, "rb").read()
     records = extract(data)
     xnu = extract_xnu(data)
-    if not records and xnu is None:
+    mark = extract_boot_mark(data)
+    if not records and xnu is None and mark is None:
         print("e1s log not found", file=sys.stderr)
         return 1
 
@@ -96,11 +113,18 @@ def main():
         if not text.endswith(b"\n"):
             sys.stdout.write("\n")
 
+    if mark is not None:
+        offset, value = mark
+        where = "entry, no checkpoint" if value == 0 else f"checkpoint {value}"
+        print(f"--- E1SMARK1 at dump offset 0x{offset:x} ({where}) ---")
+
     if args.output:
         if xnu is not None and xnu[1]:
             text = xnu[1]
         elif records:
             text = records[-1][2]
+        elif mark is not None:
+            text = f"boot checkpoint {mark[1]}\n".encode("ascii")
         else:
             text = b""
         with open(args.output, "wb") as f:

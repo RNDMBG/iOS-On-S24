@@ -985,7 +985,7 @@ Added `tools/e1s/mkstage0.sh` and a host test for the ADT rebase. The test
 compiles `adt_patch.c`, patches a generated ADT with a `RAMDisk` property, and
 checks positive and negative deltas plus the no-RAMDisk case. A second test
 checks the payload's RAMDisk segment, address, and ADT property. All eighteen
-host checks pass.
+host checks passed at that point; the marker build below repacks these images.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
@@ -1001,4 +1001,44 @@ host checks pass.
 
 The `md0` image is a diagnostic, not a default. No image has been flashed and
 no phone screen or `0x91200000` dump exists, so `mockfs`, the static init, and
-the console path are unverified on hardware.
+the console path are unverified on hardware. The 2026-10-30 marker build below
+repacks these images; its table is the current one.
+
+## 2026-10-30 - pre-MMU boot marker
+
+The loader log says how far the loader got, but not whether XNU started.
+`0012` adds `E1S_BOOT_MARK n` after the existing `LOADER_CHECKPOINT n` at
+checkpoints 1-4 in `osfmk/arm64/start.s`. Each writes `n` to `0x912ff000 + 8`
+while the MMU is off. Checkpoint 5 runs after `SCTLR_EL1` is set, so it is not
+marked: a physical store there would need a valid mapping.
+
+The loader now clears a 16-byte page at `0x912ff000`, writes `E1SMARK1` and a
+zero, and cleans the line before the jump. A dump with the magic but no console
+therefore separates "XNU never started" (0) from "XNU stopped before the MMU"
+(1-4). `read_log.py` scans for the magic and prints the checkpoint. The page is
+the last page of the 2 MiB `sec_debug_next` reservation; the XNU ring starts at
+`0x91300000`.
+
+`tools/e1s/test_e1s_marker.py` checks that the patch has exactly the four
+pre-MMU marks, the loader layout, and the parser; CI runs it. The kernel linked
+at 16,244,472 bytes, SHA-256
+`8857a91a01ee634870b3cae532942e0f29139b772210a19699c11d88fbea1001`; the build
+still stops only in `check_all_exports`. The loader Image is 118,784 bytes,
+SHA-256 `1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba`.
+All images were repacked.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-xnu/out/Image` | 118,784 | `1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `eb6608d40fa0acf8ae7c0682b5d0e9c2d8d60946b3767fce2f9dfb0d4426cd2f` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `58725588fcc45e936a5e7f8595805de98c1bf804d7510fcb9b2dcc27acc4eec9` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `1b68be5dd998d365548d83ee9ecbce49fbedc017196797c0db3ae42341985fa6` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `8023ffe731f28f3c5057bb60ac07e48524be4972272c5c3495725f2c60f3d4dd` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `18dad876972adda2b53d13bce5152abf8e89816ae7865ce9d3e95ed38cb2de1a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `a6186a8bdfff9b7843f59a34174982f6973b6a13a9b888a12e4d813caf15b232` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
+
+All nineteen host checks pass, including the marker test. No image has been
+flashed and no phone screen or `0x91200000` dump exists, so the marker page,
+the `md0` path, and every driver remain unverified on hardware.

@@ -125,8 +125,8 @@ This build produced:
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `8a4dbb87cd24540ad5296038458720b21e1ab3d2db812dd0d085bd3ede796312` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `8380a6647a18d93553959b4a985dca430292758fd3108e82b323d0763d840c68` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `18dad876972adda2b53d13bce5152abf8e89816ae7865ce9d3e95ed38cb2de1a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `a6186a8bdfff9b7843f59a34174982f6973b6a13a9b888a12e4d813caf15b232` |
 
 The stock kernel is 37,640,704 bytes with `image_size` 40,173,568; the stub's
 header reserves 42,270,720 bytes (0x2850000), so S-Boot places the DTB after
@@ -219,6 +219,11 @@ rootfs. Build it with `tools/e1s/mkstage0.sh`; see
 `SWEET userspace` lines. The command line adds `launchdsuffix=release rd=md0
 cs_enforcement_disable=1`.
 
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
+
 This build produced:
 
 | File | Size |
@@ -230,13 +235,13 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `461ed5834d3d16a941316892991d24355709d17c84f2c4250077819263385196`
+  `8857a91a01ee634870b3cae532942e0f29139b772210a19699c11d88fbea1001`
 - `shim/e1s-xnu/out/Image`:
-  `90a0ca450d1b2c3740f0693e89e059d340253298245463e2487c6fa14c5b0e33`
+  `1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba`
 - `e1s-boot-touch.img`:
-  `c6fa714be44e2a4601a70978df67dd97a569e3078d3d82924fbd1fa63f2805db`
+  `eb6608d40fa0acf8ae7c0682b5d0e9c2d8d60946b3767fce2f9dfb0d4426cd2f`
 - `e1s-boot-touch.img.tar`:
-  `33c64299b330f31a89c3c7d95d67a5d5460a6ba40ee3a8f393ffa21c68385917`
+  `58725588fcc45e936a5e7f8595805de98c1bf804d7510fcb9b2dcc27acc4eec9`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`
@@ -345,7 +350,13 @@ The records can include:
 - the XNU console ring (`E1SXNU02`) at `0x91300000`, in the second MiB. Once
   `bsd_init` installs it, every character that reaches `_cnputs` is mirrored
   there, including the display probe, PMIC/ACPM, UFS and panic output. Earlier
-  kernel output is not captured.
+  kernel output is not captured;
+- the pre-MMU marker (`E1SMARK1`) at `0x912ff000`, the last page before the
+  ring. The loader writes the magic and `0`; XNU replaces the value with `1`
+  through `4` at `start.s` checkpoints before the MMU is enabled. `0` means the
+  kernel entry was never reached, `1` is the first instruction, `2` is after
+  `OSLAR_EL1`, `3` is after the bootstrap tables, and `4` means `common_start`
+  was reached but the MMU was not enabled.
 
 The stock-kernel log is written before the jump to Android. Android may reuse
 the `sec_debug_next` region after boot, so take the screen photo first and do
@@ -360,7 +371,8 @@ python3 tools/e1s/read_log.py e1s-log.bin
 ```
 
 `594432 * 4096` is `0x91200000`; 512 blocks is 2 MiB. `read_log.py` prints the
-loader/menu record first and then the XNU ring, unwrapped if it has wrapped.
+loader/menu record, the XNU ring (unwrapped if it has wrapped), and the
+`E1SMARK1` checkpoint.
 If `/dev/mem` is blocked by the recovery kernel, use the screen photograph and
 record that the log could not be read. Do not attempt to write to `/dev/mem`.
 `e1slog=0` disables the XNU ring for a comparison boot.
