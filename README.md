@@ -315,8 +315,11 @@ loader when present, and the 64 MiB headroom. No image here has been flashed.
 The previews are `out/e1s-s24-boot-android.png` and
 `out/e1s-s24-menu-menu.png`; they are host renders, not phone captures.
 `tools/e1s/qemu_screen.sh` draws the real XNU loader UI
-(`shim/e1s-xnu/ui.c`) on QEMU's ramfb into `out/qemu-screen/screen.ppm`; it is
-a screen simulation that executes no XNU code and no Exynos hardware.
+(`shim/e1s-xnu/ui.c`) on QEMU's ramfb into `out/qemu-screen/screen.ppm`, plus
+`screen-phone.ppm` with the e1s panel values (scanout `0xFA200000`, the
+24,650,908-byte/12-segment APFS payload, `rd=md0`). It is a screen simulation
+that executes no XNU code and no Exynos hardware; `screen-phone.ppm` is what
+the panel should look like on the phone, not a phone capture.
 
 ## Building
 

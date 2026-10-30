@@ -23,6 +23,28 @@
 #define FW_CFG_DMA_SELECT 0x0008U
 #define FW_CFG_DMA_WRITE 0x0010U
 
+/*
+ * E1S_PHONE_VALUES shows the e1s panel values (the ones the loader would read
+ * from the phone's DTB) while the pixels still land in QEMU's ramfb. It makes
+ * the capture look like the expected phone screen; it is not a phone boot and
+ * the window values remain the 0xA0000000 fallback.
+ */
+#ifdef E1S_PHONE_VALUES
+#define INFO_FB_BASE     0xFA200000UL
+#define INFO_FB_SIZE     0x9A4000ULL
+#define INFO_PAYLOAD     24650908ULL
+#define INFO_NSEGS       12
+#define INFO_ADT_SIZE    16748
+#define INFO_CMDLINE     "debug=0x14e cpus=1 keepsyms=1 -v launchdsuffix=release rd=md0 cs_enforcement_disable=1"
+#else
+#define INFO_FB_BASE     FB_BASE
+#define INFO_FB_SIZE     ((uint64_t)FB_WIDTH * FB_HEIGHT * 4U)
+#define INFO_PAYLOAD     16262016ULL
+#define INFO_NSEGS       10
+#define INFO_ADT_SIZE    16644
+#define INFO_CMDLINE     "debug=0x14e cpus=1 keepsyms=1 -v"
+#endif
+
 struct fw_cfg_dma {
 	uint32_t control;
 	uint32_t length;
@@ -156,8 +178,8 @@ void probe_main(uintptr_t dtb)
 {
 	static const struct ui_boot_info info = {
 		.have_fb = 1,
-		.fb_base = FB_BASE,
-		.fb_size = (uint64_t)FB_WIDTH * FB_HEIGHT * 4U,
+		.fb_base = INFO_FB_BASE,
+		.fb_size = INFO_FB_SIZE,
 		.fb_w = FB_WIDTH,
 		.fb_h = FB_HEIGHT,
 		.fb_stride = FB_STRIDE,
@@ -169,10 +191,10 @@ void probe_main(uintptr_t dtb)
 		.mem_size = 0x20000000ULL,
 		.win_base = 0xA0000000ULL,
 		.win_size = 0x20000000ULL,
-		.payload_size = 16262016ULL,
-		.nsegs = 10,
-		.adt_size = 16644,
-		.cmdline = "debug=0x14e cpus=1 keepsyms=1 -v",
+		.payload_size = INFO_PAYLOAD,
+		.nsegs = INFO_NSEGS,
+		.adt_size = INFO_ADT_SIZE,
+		.cmdline = INFO_CMDLINE,
 	};
 	struct ui_fb fb = {
 		.base = (volatile uint32_t *)FB_BASE,
