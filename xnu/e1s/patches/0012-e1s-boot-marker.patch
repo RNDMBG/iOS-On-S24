@@ -1,7 +1,7 @@
 diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -636,6 +636,18 @@
+@@ -636,6 +636,19 @@
  1:
  .endmacro
  
@@ -17,10 +17,11 @@ diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	str	x10, [x9, #8]
 +#endif
 +.endm
- 
++
  	.align 2
  	.globl EXT(start_first_cpu)
-@@ -646,6 +658,7 @@
+ LEXT(start_first_cpu)
+@@ -645,6 +658,7 @@
  	mov		x20, x0
  	mov		x21, #0
  	LOADER_CHECKPOINT 1
@@ -28,7 +29,7 @@ diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
  
  	// Set low reset vector before attempting anything that might trap
  	// (under a third-party hypervisor even the OS lock write below can).
-@@ -656,6 +669,7 @@
+@@ -655,6 +669,7 @@
  	// Unlock the core for debugging
  	msr		OSLAR_EL1, xzr
  	LOADER_CHECKPOINT 2
@@ -36,7 +37,7 @@ diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
  
  
  	// Get the kernel memory parameters from the boot args
-@@ -802,6 +816,7 @@
+@@ -801,6 +816,7 @@
  	dsb		ish
  
  	LOADER_CHECKPOINT 3
@@ -44,7 +45,7 @@ diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
  
  	b		common_start
  
-@@ -935,6 +950,7 @@
+@@ -934,6 +950,7 @@
  
  	cbnz	x21, 1f								// boot CPU cold start only
  	LOADER_CHECKPOINT 4
