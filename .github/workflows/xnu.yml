@@ -59,6 +59,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu qemu-system-arm
           sh shim/e1s-menu/build-qemu.sh
           python3 tools/e1s/test_e1s_menu_qemu.py
+          python3 tools/e1s/test_e1s_qemu_screen.py
 
       - name: Apply the HackiOS base and the e1s series
         run: |

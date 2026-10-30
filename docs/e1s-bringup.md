@@ -507,6 +507,15 @@ missing UFS signature, or a nonzero QEMU exit. This is a code smoke test, not a
 boot test. It does not exercise S-Boot, the `0xFA200000` framebuffer, the
 Exynos UFS controller/PHY, or any other Samsung hardware.
 
+`tools/e1s/qemu_screen.sh` is the loader screen counterpart: it compiles
+`shim/e1s-xnu/ui.c` into a small QEMU program, programs QEMU's `ramfb` through
+`fw_cfg`, draws the finished loader screen, and takes a monitor `screendump`
+to `out/qemu-screen/screen.ppm`. It shows the real screen layout on QEMU's
+simulated framebuffer, but it does not run the loader or XNU: the XNU e1s
+payload expects the Exynos GIC/timer, the S-Boot DTB, and the `0xFA200000`
+scanout, so it cannot boot on `-M virt`. Treat the output as a screen
+simulation only.
+
 `run_qemu.ps1 -Display` adds QEMU's `ramfb` device and an SDL window. The probe
 draws a 1080x2340 portrait framebuffer (the SM-S921B resolution), prints the
 simulated S24 banner, and halts with the window open. The host window may be

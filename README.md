@@ -314,6 +314,9 @@ checks the stock header, the 2 MiB placement, the BSS reservation, the XNU
 loader when present, and the 64 MiB headroom. No image here has been flashed.
 The previews are `out/e1s-s24-boot-android.png` and
 `out/e1s-s24-menu-menu.png`; they are host renders, not phone captures.
+`tools/e1s/qemu_screen.sh` draws the real XNU loader UI
+(`shim/e1s-xnu/ui.c`) on QEMU's ramfb into `out/qemu-screen/screen.ppm`; it is
+a screen simulation that executes no XNU code and no Exynos hardware.
 
 ## Building
 
