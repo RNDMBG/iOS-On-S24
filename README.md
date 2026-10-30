@@ -255,10 +255,20 @@ how far a failed boot got. The flash procedure is in
 | `out/e1s-boot-smp.img` | 16,396,304 | `1b68be5dd998d365548d83ee9ecbce49fbedc017196797c0db3ae42341985fa6` |
 | `out/e1s-boot-smp.img.tar` | 16,404,480 | `8023ffe731f28f3c5057bb60ac07e48524be4972272c5c3495725f2c60f3d4dd` |
 
-`out/e1s-boot-md0.img` is a separate diagnostic image: a 16.6 KB static Mach-O
-is appended as the `md0` RAMDisk and XNU runs it as `/sbin/launchd` through
-`mockfs`. It is not an iOS rootfs. See
-[docs/e1s-userland.md](docs/e1s-userland.md).
+The diagnostic images boot one static Mach-O as PID 1. `out/e1s-boot-md0.img`
+appends the raw Mach-O as the `md0` RAMDisk and lets `mockfs` resolve
+`/sbin/launchd`. `out/e1s-boot-apfs.img` puts the same binary at
+`/sbin/launchd` inside a 4 MiB APFS container built by the imported
+`tools/e1s/apfs/mkapfs.py` (HakiOS, MIT); its image passes `verify.py` and
+`apfsck -cw` on the host. Neither is an iOS rootfs, and neither has run on the
+phone. See [docs/e1s-userland.md](docs/e1s-userland.md).
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
+| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
+| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
 
 ### Stock-kernel boot screen and menu
 

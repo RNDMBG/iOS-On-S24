@@ -224,6 +224,22 @@ cs_enforcement_disable=1`.
 | `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
 | `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
 
+### APFS root variant (optional)
+
+`out/e1s-boot-apfs.img` puts the static init at `/sbin/launchd` inside a 4 MiB
+APFS container instead of relying on `mockfs`. Build it with
+`tools/e1s/mkrootfs.sh`; the container is built by the imported
+`tools/e1s/apfs/mkapfs.py` and checked on the host with `verify.py` and
+`apfsck -cw`. The command line is the same as the `md0` variant. Expect
+`apfs: volume 0 "ROOT": 2 files, 4 directories, ...` before `BSD root: md0`,
+then the same `load_init_program` and `SWEET userspace` lines. This is still a
+static Mach-O, not iOS userland.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
+| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
+
 This build produced:
 
 | File | Size |

@@ -1039,6 +1039,44 @@ All images were repacked.
 | `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
 | `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
 
-All nineteen host checks pass, including the marker test. No image has been
+All nineteen host checks pass, including the marker test. The first version of
+the `0012` patch had one blank line too many in its context and failed the CI
+apply step; `691d80e` fixes the context and CI run 26 passes. No image has been
 flashed and no phone screen or `0x91200000` dump exists, so the marker page,
 the `md0` path, and every driver remain unverified on hardware.
+
+## 2026-10-30 - APFS md0 root image
+
+The raw Mach-O `md0` image tests `mockfs`, which is not a filesystem. This
+build adds the real filesystem path: a small APFS container whose
+`/sbin/launchd` is the same static init. XNU's APFS driver mounts the first
+volume with a root directory as `/`; `rd=md0` still skips
+`FSIOC_KERNEL_ROOTAUTH`.
+
+`tools/e1s/apfs/` imports `mkapfs.py`, `apfs.py` and `verify.py` from
+`oosexgang/hackios-xnu-kernel` at commit
+`a3384e031eb1e605cf37adaefc19991f04f6274b` (HakiOS authors, MIT; the license is
+kept in the directory). `tools/e1s/mkrootfs.sh` stages `/sbin/launchd`,
+`/dev`, and `/private/var`, runs the builder, checks the image with the
+imported reader, and packs the payload. `tools/e1s/test_e1s_apfs.py` runs the
+same checks in CI, including the payload RAMDisk and ADT property.
+
+The 4 MiB image passes the imported reader (`content`: 6 block checksums, every
+file byte-for-byte identical; `clines` shows `//sbin/launchd`) and `apfsck
+-cw` from linux-apfs/apfsprogs at `1bd1c1c`. The kernel's own `apfs_lib.c`
+from `~/e1s-build/irq`, compiled as the upstream `apfs-tool`, lists the volume
+and reads `/sbin/launchd` with the exact SHA-256
+`f5de3714...`; the HackiOS base copy in `xnu/hackios/files` is byte-identical
+to the built tree, so this is the reader the kernel would run. It is still a
+host check: the kernel mount and the exec have not run on the phone.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| APFS root image (`e1s-root.apfs`) | 4,194,304 | `c01aa3a554bbe1f3f65a011c5d71a3f57dcc25c8eefbd26024b78a98ee44a576` |
+| `/sbin/launchd` Mach-O | 16,635 | `f5de3714ff95e6a3b9ece30723f677de0f3f74ec5eb985a00c5ae872f0ac9bf1` |
+| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
+| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
+
+All twenty host checks pass. No image has been flashed and no phone screen or
+`0x91200000` dump exists, so neither `mockfs` nor APFS has mounted on the
+phone.

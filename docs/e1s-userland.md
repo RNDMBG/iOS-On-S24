@@ -1,7 +1,16 @@
-# e1s userland smoke test (md0)
+# e1s userland smoke tests (md0)
 
-This is the first userland path after XNU, not iOS 16.5. It boots one static
-Mach-O from RAM as PID 1. No APFS or HFS+ image is involved.
+These are the first userland paths after XNU, not iOS 16.5. Both boot one
+static Mach-O from RAM as PID 1:
+
+- the raw-Mach-O path (`out/e1s-boot-md0.img`) lets `mockfs` treat the device
+  as a Mach-O and resolve `/sbin/launchd` inside it;
+- the APFS path (`out/e1s-boot-apfs.img`) puts the same binary in a real APFS
+  container at `/sbin/launchd`, built by the imported
+  `tools/e1s/apfs/mkapfs.py`.
+
+Neither contains an Apple binary or an iOS rootfs. The kernel's HFS+ driver is
+not present, so APFS is the only filesystem-image root path today.
 
 ## How it works
 
@@ -42,11 +51,15 @@ cd shim/e1s-xnu && ./build.sh && cd ../..
 tools/e1s/mkstage0.sh \
   ~/e1s-build/irq/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s \
   out/e1s-boot-md0.img
+tools/e1s/mkrootfs.sh \
+  ~/e1s-build/irq/BUILD/obj/DEVELOPMENT_ARM64_E1S/mach.development.e1s \
+  out/e1s-boot-apfs.img
 ```
 
-`mkstage0.sh` compiles `sweet-init.S` with `clang -target
-arm64-apple-ios16.0`, builds the Mach-O, packs the payload and boot image, and
-runs the verifier. The loader Image must exist first.
+`mkstage0.sh` and `mkrootfs.sh` compile `sweet-init.S` with `clang -target
+arm64-apple-ios16.0`, build the Mach-O, pack the payload and boot image, and
+run the verifier. The loader Image must exist first. `mkrootfs.sh` also runs
+the image's independent reader (`tools/e1s/apfs/verify.py content`).
 
 ## What to look for
 
@@ -63,13 +76,43 @@ If `md0` is wrong, the log shows `cannot mount root` or an exec error instead.
 A missing init line after a successful `/sbin/launchd` lookup points at the
 console device or the userland binary, not at the bootloader.
 
+## APFS root variant
+
+`tools/e1s/mkrootfs.sh` builds a 4 MiB APFS container whose `/sbin/launchd` is
+the same static init, plus `dev` and `private/var`. The kernel's APFS driver
+mounts the first volume with a root directory as `/`; `rd=md0` makes
+`bsd_rooted_ramdisk()` skip `FSIOC_KERNEL_ROOTAUTH`. The expected console is:
+
+- `apfs: volume 0 "ROOT": 2 files, 4 directories, ...`
+- `BSD root: md0, major ..., minor ...`
+- `load_init_program: attempting to load /sbin/launchd`
+- `*** SWEET userspace: init running as PID 1 ***`
+
+The builder and reader in `tools/e1s/apfs/` are from HakiOS (MIT), pinned at
+`a3384e031eb1e605cf37adaefc19991f04f6274b`; see the README there. The image
+for this build:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
+| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
+| APFS root image | 4,194,304 | `c01aa3a554bbe1f3f65a011c5d71a3f57dcc25c8eefbd26024b78a98ee44a576` |
+| `/sbin/launchd` Mach-O | 16,635 | `f5de3714ff95e6a3b9ece30723f677de0f3f74ec5eb985a00c5ae872f0ac9bf1` |
+
+The image passes the imported reader (`verify.py content`, all block checksums
+and files) and `apfsck -cw` from linux-apfs/apfsprogs at `1bd1c1c`. The
+kernel's own `apfs_lib.c` from this tree, compiled as the upstream `apfs-tool`
+with `tools/apfs/build-tool.sh`, lists the `ROOT` volume and returns the exact
+`/sbin/launchd` SHA-256. That is still a host check with the kernel code, not a
+mount; neither the mount nor the exec has run on the phone.
+
 ## Limits
 
 This does not boot launchd, SpringBoard, or any iOS 16.5 binary. It has no
-APFS root, no Apple shared cache, no trust cache, no UFS root, and no display
-or touch integration. It only proves the kernel can create `md0`, mount
-`mockfs`, exec a static Mach-O, and write to the console. It has not been run
-on the phone.
+Apple shared cache, no trust cache, no UFS root, and no display or touch
+integration. It only proves the kernel can create `md0`, mount a RAMDisk root
+(either through `mockfs` or the APFS driver), exec a static Mach-O, and write
+to the console. It has not been run on the phone.
 
 The flash and recovery procedure is the BOOT-only procedure in
 [flashing.md](flashing.md). Keep the stock BOOT backup and do not touch
