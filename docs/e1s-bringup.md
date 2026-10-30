@@ -424,7 +424,7 @@ The image is not padded to the 64 MiB BOOT partition. The v4 header carries
 `kernel_size`; the current image is 16,388,112 bytes. It is a new loader plus
 the XNU payload, not a patched copy of the stock `boot.img`. The current
 loader Image is 118,784 bytes, SHA-256
-`1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba`. It
+`2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`. It
 clears an `E1SMARK1` page at `0x912ff000`; XNU writes 1-4 there before the MMU
 is enabled, so a dump shows how far the kernel got. The screen has not yet been
 observed on the phone.

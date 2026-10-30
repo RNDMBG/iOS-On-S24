@@ -63,11 +63,11 @@ int main(int argc, char **argv)
 """
 
 
-def ramdisk_prop(blob):
+def ramdisk_prop(blob, name="RAMDisk"):
     root, _ = adt.parse(blob)
     chosen = next(c for c in root.children if c.name == "chosen")
     mmap = next(c for c in chosen.children if c.name == "memory-map")
-    return mmap.prop("RAMDisk")
+    return mmap.prop(name)
 
 
 def run(harness, path, delta):
@@ -85,6 +85,11 @@ def main():
         with_ramdisk = os.path.join(tmp, "with-ramdisk.adt")
         blob = mkpayload.add_ramdisk_to_adt(blob, 0xA0000000, 0x8000)
         open(with_ramdisk, "wb").write(blob)
+
+        with_ramdisks = os.path.join(tmp, "with-ramdisks.adt")
+        blob = mkpayload.add_ramdisk_to_adt(blob, 0xB0000000, 0x10000,
+                                           "RAMDisk1")
+        open(with_ramdisks, "wb").write(blob)
 
         plain = os.path.join(tmp, "plain.adt")
         open(plain, "wb").write(open(adt_path, "rb").read())
@@ -107,6 +112,14 @@ def main():
             sys.exit("negative rebase failed")
         phys, _ = struct.unpack("<QQ", ramdisk_prop(open(with_ramdisk, "rb").read()))
         assert phys == 0xA0FFF000, hex(phys)
+
+        if run(exe, with_ramdisks, 0x1000000) != 0:
+            sys.exit("two-ramdisk rebase failed")
+        both = open(with_ramdisks, "rb").read()
+        phys, _ = struct.unpack("<QQ", ramdisk_prop(both))
+        assert phys == 0xA1000000, hex(phys)
+        phys, size = struct.unpack("<QQ", ramdisk_prop(both, "RAMDisk1"))
+        assert phys == 0xB1000000 and size == 0x10000, hex(phys)
 
         if run(exe, plain, 0x1000000) != 0:
             sys.exit("plain ADT rejected")

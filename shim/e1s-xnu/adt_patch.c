@@ -203,14 +203,14 @@ adt_rebase_ramdisk(uintptr_t adt, uint64_t size, int64_t delta)
 		if (!in_bounds(size, off, 36) ||
 		    rd32(adt, size, off + 32, &len))
 			return -1;
-		if (prop_name_is(adt, off, "RAMDisk")) {
+		if (prop_name_is(adt, off, "RAMDisk") ||
+		    prop_name_is(adt, off, "RAMDisk1")) {
 			uint64_t phys;
 			if ((len & 0x7fffffffU) != 16 || (len & 0x80000000U))
 				return -1;
 			phys = *(const volatile uint64_t *)(adt + off + 36);
 			*(volatile uint64_t *)(adt + off + 36) =
 			    phys + (uint64_t)delta;
-			return 0;
 		}
 		len &= 0x7fffffffU;
 		uint64_t next = (uint64_t)off + 36 + ((len + 3U) & ~3U);

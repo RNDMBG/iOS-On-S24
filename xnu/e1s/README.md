@@ -217,6 +217,16 @@ PMIC/ACPM, UFS and panic output can be read back from recovery. Dump 2 MiB at
 the unwrapped XNU ring. `e1slog=0` turns the ring off without changing
 anything else.
 
+### RAMDisk1 / md1 (/dev/md1)
+
+`mkpayload.py --ramdisk1 IMAGE` appends a second image after the first RAMDisk
+and adds `/chosen/memory-map` `RAMDisk1`; `IOFindBSDRoot` in this tree turns it
+into `/dev/md1`, a volume user space mounts, never the root. The loader's
+`adt_rebase_ramdisk()` rebases both pointers when it copies the payload to the
+DTB-selected window. `tools/e1s/mkrootfs.sh` uses it for the second APFS
+volume; the test init mounts `/dev/md1` on `/mnt`. No two-disk image has run
+on the phone.
+
 ### Pre-MMU boot marker (0012)
 
 `0012-e1s-boot-marker.patch` adds `E1S_BOOT_MARK n` after the existing

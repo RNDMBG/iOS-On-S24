@@ -249,26 +249,28 @@ how far a failed boot got. The flash procedure is in
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `shim/e1s-xnu/out/Image` | 118,784 | `1c43279037c104738a3525026f834d0cb460d24cd43824f2f559327cecb5ccba` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `eb6608d40fa0acf8ae7c0682b5d0e9c2d8d60946b3767fce2f9dfb0d4426cd2f` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `58725588fcc45e936a5e7f8595805de98c1bf804d7510fcb9b2dcc27acc4eec9` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `1b68be5dd998d365548d83ee9ecbce49fbedc017196797c0db3ae42341985fa6` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `8023ffe731f28f3c5057bb60ac07e48524be4972272c5c3495725f2c60f3d4dd` |
+| `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `0238afae4e61d324c9c7f22eb798a733cbdda7e38a321b8dcf27863e613c6793` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `0c7488717957e975bbeef5b670d6c78a48599ae81851c674b60cd766e35f22b0` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `e14752e9fe051b0db0dabe35b72bd7bfa5154da7cb1c780639ab61ee1fbd6b24` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `5ac1db782a2080c0a18b25765952c66234865809759b4fc278ff3a66b02c7618` |
 
 The diagnostic images boot one static Mach-O as PID 1. `out/e1s-boot-md0.img`
 appends the raw Mach-O as the `md0` RAMDisk and lets `mockfs` resolve
 `/sbin/launchd`. `out/e1s-boot-apfs.img` puts the same binary at
-`/sbin/launchd` inside a 4 MiB APFS container built by the imported
-`tools/e1s/apfs/mkapfs.py` (HakiOS, MIT); its image passes `verify.py` and
-`apfsck -cw` on the host. Neither is an iOS rootfs, and neither has run on the
-phone. See [docs/e1s-userland.md](docs/e1s-userland.md).
+`/sbin/launchd` inside a 4 MiB APFS container and adds a second 4 MiB APFS
+volume as `RAMDisk1` (`/dev/md1`), which the init mounts on `/mnt`. Both
+containers are built by the imported `tools/e1s/apfs/mkapfs.py` (HakiOS, MIT)
+and pass `verify.py`, `apfsck -cw`, and the kernel's own `apfs_lib` reader on
+the host. Neither is an iOS rootfs, and neither has run on the phone. See
+[docs/e1s-userland.md](docs/e1s-userland.md).
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `7fe8c8d273d7f53051003814e4c6d259627386cc1e859a5ab535fbdc22af1af0` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `6349a4fa467332e977c944f91edb4c8b9b6f6046552ce080368234b8d18ffcbf` |
-| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
-| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `a28e788bf26176e47e121f23d1bafabb078097ea80a5f3ea8a021481eff2f2d0` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `216b3e05340e756b07dac10ec783d0540b464d1088c92442a137aabee4d328e3` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `56bbc1417e8e4ffebc63f93542760e7c6db3748d0e8d874c4c0d161f8caf5271` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `74074340967106665c4557513e70b159a9b00e577bcea3952b606a9e9c8f03ad` |
 
 ### Stock-kernel boot screen and menu
 
@@ -293,8 +295,8 @@ combinations are not verified on `e1s`.
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `18dad876972adda2b53d13bce5152abf8e89816ae7865ce9d3e95ed38cb2de1a` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `a6186a8bdfff9b7843f59a34174982f6973b6a13a9b888a12e4d813caf15b232` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `2b865187795c2388591e81745c40ddfcd9dfbb1d73aecc7cc57e8066d899abe3` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `82de8c49fdf4d1a65433430b9a3dfccbb8e44833c4a4f40ac4afa7a009da4ca6` |
 
 Build the stock-kernel image with:
 

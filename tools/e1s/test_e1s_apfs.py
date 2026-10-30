@@ -58,12 +58,12 @@ def macho():
     return bytes(image)
 
 
-def ramdisk_prop(blob):
+def ramdisk_prop(blob, name="RAMDisk"):
     import adt
     root, _ = adt.parse(blob)
     chosen = next(c for c in root.children if c.name == "chosen")
     mmap = next(c for c in chosen.children if c.name == "memory-map")
-    value = mmap.prop("RAMDisk")
+    value = mmap.prop(name)
     return None if value is None else struct.unpack("<QQ", value)
 
 
@@ -75,7 +75,8 @@ def main():
             errors.append(f"{name} is {got}, not the imported file")
 
     script = open(MKROOTFS, "r", encoding="utf-8").read()
-    for item in ("apfs/mkapfs.py", "verify.py", "--ramdisk", "rd=md0"):
+    for item in ("apfs/mkapfs.py", "verify.py", "--ramdisk", "--ramdisk1",
+                 "rd=md0"):
         if item not in script:
             errors.append(f"mkrootfs.sh missing: {item}")
 
@@ -89,11 +90,21 @@ def main():
         with open(os.path.join(root, "sbin", "launchd"), "wb") as f:
             f.write(launchd)
 
+        md1 = os.path.join(tmp, "md1")
+        os.makedirs(md1)
+        with open(os.path.join(md1, "e1s-md1.txt"), "wb") as f:
+            f.write(b"e1s md1 volume\n")
+
         image = os.path.join(tmp, "root.apfs")
+        md1_image = os.path.join(tmp, "md1.apfs")
         subprocess.run([sys.executable, MKAPFS, "-o", image, f"ROOT={root}"],
                        check=True, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
+        subprocess.run([sys.executable, MKAPFS, "-o", md1_image, f"MD1={md1}"],
+                       check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
         blob = open(image, "rb").read()
+        md1_blob = open(md1_image, "rb").read()
         if len(blob) % 4096 or len(blob) == 0:
             errors.append("the APFS image is not whole blocks")
         if blob[32:36] != b"NXSB":
@@ -107,6 +118,11 @@ def main():
             if struct.unpack_from("<II", blob, 24)[0] == 0:
                 errors.append("the APFS object type is missing")
 
+        if md1_blob[32:36] != b"NXSB":
+            errors.append("the md1 image does not start with an NXSB block")
+        elif len(md1_blob) % 4096 or len(md1_blob) == 0:
+            errors.append("the md1 image is not whole blocks")
+
         if os.name != "nt":
             got = subprocess.run([sys.executable, VERIFY, "content", image,
                                   root], check=True, capture_output=True,
@@ -118,27 +134,40 @@ def main():
                                  text=True).stdout
             if "sbin/launchd" not in got:
                 errors.append("the image tree has no sbin/launchd")
+            got = subprocess.run([sys.executable, VERIFY, "content", md1_image,
+                                  md1], check=True, capture_output=True,
+                                 text=True).stdout
+            if "every compared file is byte-for-byte identical" not in got:
+                errors.append("the independent reader did not accept md1")
 
         kernel = os.path.join(tmp, "kernel")
         open(kernel, "wb").write(macho())
         adt_path = os.path.join(tmp, "e1s.adt")
         subprocess.run([sys.executable, os.path.join(XNU, "mkadt.py"),
                         adt_path], check=True, stdout=subprocess.DEVNULL)
-        payload, info = mkpayload.build(kernel, adt_path, "rd=md0", image)
+        payload, info = mkpayload.build(kernel, adt_path, "rd=md0", image,
+                                        md1_image)
         magic, version, nsegs = struct.unpack_from("<8sII", payload, 0)
         assert magic == b"SWEETXNU" and version == 1
-        if nsegs != 2:
-            errors.append(f"the RAMDisk payload has {nsegs} segments")
+        if nsegs != 3:
+            errors.append(f"the two-RAMDisk payload has {nsegs} segments")
         rd_vm, rd_vs, rd_off, rd_fs = struct.unpack_from("<4Q", payload,
                                                         0x2a8 + 32)
+        r1_vm, r1_vs, r1_off, r1_fs = struct.unpack_from("<4Q", payload,
+                                                        0x2a8 + 64)
         if rd_fs != len(blob) or payload[rd_off:rd_off + rd_fs] != blob:
             errors.append("the payload RAMDisk is not the APFS image")
+        if r1_fs != len(md1_blob) or payload[r1_off:r1_off + r1_fs] != md1_blob:
+            errors.append("the payload RAMDisk1 is not the md1 image")
         adt_off, adt_size = struct.unpack_from("<2Q", payload, 0x20)
         rd = ramdisk_prop(payload[adt_off:adt_off + adt_size])
         if rd != (0xA0000000 + (rd_vm - VIRT), rd_vs):
             errors.append(f"the ADT RAMDisk is {rd}, not the payload segment")
-        if info["ramdisk"] is None:
-            errors.append("mkpayload did not report the RAMDisk")
+        rd1 = ramdisk_prop(payload[adt_off:adt_off + adt_size], "RAMDisk1")
+        if rd1 != (0xA0000000 + (r1_vm - VIRT), r1_vs):
+            errors.append(f"the ADT RAMDisk1 is {rd1}, not the segment")
+        if info["ramdisk"] is None or info["ramdisk1"] is None:
+            errors.append("mkpayload did not report both RAMDisks")
 
     if errors:
         for error in errors:

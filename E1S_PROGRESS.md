@@ -1079,4 +1079,48 @@ host check: the kernel mount and the exec have not run on the phone.
 
 All twenty host checks pass. No image has been flashed and no phone screen or
 `0x91200000` dump exists, so neither `mockfs` nor APFS has mounted on the
+phone. The loader and init changed after this build; the RAMDisk1 section
+below repacks these images.
+
+## 2026-10-30 - RAMDisk1 and the md1 APFS volume
+
+`IOKitBSDInit.cpp` in this tree already creates `/dev/md1` from a
+`/chosen/memory-map` `RAMDisk1` property (a HackiOS addition). The payload and
+loader now carry that second image:
+
+- `mkpayload.py --ramdisk1 IMAGE` appends it after the first RAMDisk, adds the
+  payload segment and the ADT property; `--ramdisk` still maps to md0.
+- `adt_rebase_ramdisk()` rebases both `RAMDisk` and `RAMDisk1` when the loader
+  copies the payload to the DTB-selected window.
+- `sweet-init.S` calls `mount("apfs", "/mnt", MNT_RDONLY, "/dev/md1")` after
+  the console is up and prints `SWEET init: /dev/md1 mounted` or
+  `not mounted`.
+- `mkrootfs.sh` builds the `ROOT` and `MD1` APFS containers; the APFS boot
+  image's payload has 12 segments.
+
+The loader changed, so all images were repacked. Both containers pass the
+imported reader and `apfsck -cw`; the kernel's own `apfs_lib` (`apfs-tool`)
+reads `ROOT` and `MD1` and returns the exact `/sbin/launchd` and
+`/e1s-md1.txt` contents. That is still a host check; no mount has run on the
 phone.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `0238afae4e61d324c9c7f22eb798a733cbdda7e38a321b8dcf27863e613c6793` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `0c7488717957e975bbeef5b670d6c78a48599ae81851c674b60cd766e35f22b0` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `e14752e9fe051b0db0dabe35b72bd7bfa5154da7cb1c780639ab61ee1fbd6b24` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `5ac1db782a2080c0a18b25765952c66234865809759b4fc278ff3a66b02c7618` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `2b865187795c2388591e81745c40ddfcd9dfbb1d73aecc7cc57e8066d899abe3` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `82de8c49fdf4d1a65433430b9a3dfccbb8e44833c4a4f40ac4afa7a009da4ca6` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `a28e788bf26176e47e121f23d1bafabb078097ea80a5f3ea8a021481eff2f2d0` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `216b3e05340e756b07dac10ec783d0540b464d1088c92442a137aabee4d328e3` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `56bbc1417e8e4ffebc63f93542760e7c6db3748d0e8d874c4c0d161f8caf5271` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `74074340967106665c4557513e70b159a9b00e577bcea3952b606a9e9c8f03ad` |
+| APFS `ROOT` | 4,194,304 | `dc29c22ff7a26630002655d932cef0d75a846bfb52479d70e99d0e976fd9074c` |
+| APFS `MD1` | 4,194,304 | `45ebf1c2fcae332c19b794b45a6ee08e2154c08c9237f5442ef165ce9269bd9d` |
+| `/sbin/launchd` Mach-O | 16,635 | `93041871cea969e53211ffede941a7ca31bc666cf20faffd1d47dde6a84f0104` |
+
+All twenty host checks pass. No image has been flashed and no phone screen or
+`0x91200000` dump exists; the md1 mount and the APFS root mount are unverified
+on hardware.

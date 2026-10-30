@@ -63,13 +63,15 @@ the image's independent reader (`tools/e1s/apfs/verify.py content`).
 
 ## What to look for
 
-On the loader screen the payload now has 11 segments. In the XNU console or
-the 2 MiB dump at `0x91200000`:
+On the loader screen the payload has 11 segments for `md0`, 12 when the APFS
+image adds `RAMDisk1`. In the XNU console or the 2 MiB dump at `0x91200000`:
 
 - `BSD root: md0, major ..., minor ...`
 - `load_init_program: attempting to load /sbin/launchd`
 - `*** SWEET userspace: init running as PID 1 ***`
 - `SWEET init: still alive` every five seconds
+- `SWEET init: /dev/md1 mounted` when the boot image carries the second APFS
+  volume
 - `E1SMARK1` at `0x912ff000` with value `4` (the pre-MMU checkpoints passed)
 
 If `md0` is wrong, the log shows `cannot mount root` or an exec error instead.
@@ -78,33 +80,40 @@ console device or the userland binary, not at the bootloader.
 
 ## APFS root variant
 
-`tools/e1s/mkrootfs.sh` builds a 4 MiB APFS container whose `/sbin/launchd` is
-the same static init, plus `dev` and `private/var`. The kernel's APFS driver
-mounts the first volume with a root directory as `/`; `rd=md0` makes
-`bsd_rooted_ramdisk()` skip `FSIOC_KERNEL_ROOTAUTH`. The expected console is:
+`tools/e1s/mkrootfs.sh` builds two 4 MiB APFS containers. The first (volume
+`ROOT`) holds `/sbin/launchd`, `dev`, `mnt`, and `private/var`; the kernel's
+APFS driver mounts it as `/`, and `rd=md0` makes `bsd_rooted_ramdisk()` skip
+`FSIOC_KERNEL_ROOTAUTH`. The second (volume `MD1`) is appended as `RAMDisk1`,
+which `IOFindBSDRoot` turns into `/dev/md1`; the init mounts it on `/mnt`
+through the normal `mount(2)` path. The expected console is:
 
-- `apfs: volume 0 "ROOT": 2 files, 4 directories, ...`
+- `apfs: volume 0 "ROOT": 2 files, 5 directories, ...`
 - `BSD root: md0, major ..., minor ...`
 - `load_init_program: attempting to load /sbin/launchd`
 - `*** SWEET userspace: init running as PID 1 ***`
+- `SWEET init: /dev/md1 mounted`
 
 The builder and reader in `tools/e1s/apfs/` are from HakiOS (MIT), pinned at
-`a3384e031eb1e605cf37adaefc19991f04f6274b`; see the README there. The image
-for this build:
+`a3384e031eb1e605cf37adaefc19991f04f6274b`; see the README there.
+`tools/e1s/xnu/mkpayload.py --ramdisk1` adds the second segment and the
+`RAMDisk1` ADT property, and `adt_rebase_ramdisk()` moves both pointers by the
+same delta as the payload copy.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 20,582,416 | `071e5fdfb37e4ad6f886276626472ae62b2376e8dee8c97fbd560dfccced490a` |
-| `out/e1s-boot-apfs.img.tar` | 20,592,640 | `417d7efe0bb3fe9a5162c5c841203c93dec1573b4a300cb9d84215c8142440ed` |
-| APFS root image | 4,194,304 | `c01aa3a554bbe1f3f65a011c5d71a3f57dcc25c8eefbd26024b78a98ee44a576` |
-| `/sbin/launchd` Mach-O | 16,635 | `f5de3714ff95e6a3b9ece30723f677de0f3f74ec5eb985a00c5ae872f0ac9bf1` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `56bbc1417e8e4ffebc63f93542760e7c6db3748d0e8d874c4c0d161f8caf5271` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `74074340967106665c4557513e70b159a9b00e577bcea3952b606a9e9c8f03ad` |
+| APFS root `ROOT` | 4,194,304 | `dc29c22ff7a26630002655d932cef0d75a846bfb52479d70e99d0e976fd9074c` |
+| APFS volume `MD1` | 4,194,304 | `45ebf1c2fcae332c19b794b45a6ee08e2154c08c9237f5442ef165ce9269bd9d` |
+| `/sbin/launchd` Mach-O | 16,635 | `93041871cea969e53211ffede941a7ca31bc666cf20faffd1d47dde6a84f0104` |
 
-The image passes the imported reader (`verify.py content`, all block checksums
-and files) and `apfsck -cw` from linux-apfs/apfsprogs at `1bd1c1c`. The
-kernel's own `apfs_lib.c` from this tree, compiled as the upstream `apfs-tool`
-with `tools/apfs/build-tool.sh`, lists the `ROOT` volume and returns the exact
-`/sbin/launchd` SHA-256. That is still a host check with the kernel code, not a
-mount; neither the mount nor the exec has run on the phone.
+Both containers pass the imported reader (`verify.py content`, all block
+checksums and files) and `apfsck -cw` from linux-apfs/apfsprogs at `1bd1c1c`.
+The kernel's own `apfs_lib.c` from this tree, compiled as the upstream
+`apfs-tool` with `tools/apfs/build-tool.sh`, lists both volumes and returns the
+exact `/sbin/launchd` and `/e1s-md1.txt` contents. That is still a host check
+with the kernel code, not a mount; neither the mounts nor the exec have run on
+the phone.
 
 ## Limits
 

@@ -2,7 +2,9 @@
 #define SYS_open	5
 #define SYS_getpid	20
 #define SYS_select	93
+#define SYS_mount	167
 #define O_RDWR		2
+#define MNT_RDONLY	1
 
 	.text
 	.globl	_start
@@ -37,6 +39,22 @@ _start:
 
 	adr	x1, hello_tail
 	adr	x2, alive
+	sub	x2, x2, x1
+	bl	write_console
+
+	/* mount("apfs", "/mnt", MNT_RDONLY, "/dev/md1") when the loader left one */
+	adr	x0, type_apfs
+	adr	x1, path_mnt
+	mov	x2, #MNT_RDONLY
+	adr	x3, path_md1
+	mov	x16, #SYS_mount
+	svc	#0x80
+	adr	x1, md1_fail
+	adr	x2, md1_fail_end
+	b.cs	1f
+	adr	x1, md1_ok
+	adr	x2, md1_ok_end
+1:
 	sub	x2, x2, x1
 	bl	write_console
 
@@ -79,3 +97,15 @@ hello_tail:
 alive:
 	.ascii	"SWEET init: still alive\n"
 alive_end:
+type_apfs:
+	.asciz	"apfs"
+path_mnt:
+	.asciz	"/mnt"
+path_md1:
+	.asciz	"/dev/md1"
+md1_ok:
+	.ascii	"SWEET init: /dev/md1 mounted\n"
+md1_ok_end:
+md1_fail:
+	.ascii	"SWEET init: /dev/md1 not mounted\n"
+md1_fail_end:

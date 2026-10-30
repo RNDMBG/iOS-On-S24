@@ -24,6 +24,7 @@ verifies the block checksums with the independent Python reader in `apfs.py`.
 `verify.py clines IMAGE /` lists the image tree. Both run on Linux; `apfs.py`
 uses `os.pread`, so `verify.py` does not run on Windows.
 
-`tools/e1s/mkrootfs.sh` wraps the builder and packs the result as the `md0`
-RAMDisk of a boot image. This is the APFS root path; the raw Mach-O in
-`mkstage0.sh` is the older `mockfs` path.
+`tools/e1s/mkrootfs.sh` wraps the builder and packs two containers as the
+`md0` RAMDisk (`RAMDisk`) and the `/dev/md1` volume (`RAMDisk1`) of a boot
+image. This is the APFS root path; the raw Mach-O in `mkstage0.sh` is the
+older `mockfs` path.
