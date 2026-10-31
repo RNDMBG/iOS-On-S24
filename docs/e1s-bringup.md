@@ -67,6 +67,7 @@ What is e1s-specific so far:
 | S2MPS27 RTC and calendar epoch | `0009` | builds, untested |
 | DECON/DSIM/RDMA framebuffer probe | `0010` | builds, untested |
 | Persistent console ring | `0011` | builds, untested |
+| Early console-ring install | `0014` | builds, untested; installs the ring in `kernel_bootstrap`, not `bsd_init` |
 | APFS root authentication | `0013` | builds, untested; answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
@@ -370,8 +371,11 @@ From `s5e9945-rmem.dtsi` and the e1s board overlay:
 `0x91200000` is the first RAM log target. It is a Samsung debug reservation,
 not a proven pstore region. The loader writes an ASCII record there. `0011`
 puts a second record at `0x91300000`: a 1 MiB ring that mirrors every
-character reaching the XNU console after `bsd_init`, including the display
-probe, PMIC/ACPM, UFS and panic output. Dump the full 2 MiB so both records
+character reaching the XNU console. `0014` installs the ring in
+`kernel_bootstrap`, immediately after `vm_mem_bootstrap()` creates the kernel
+map, instead of waiting for `bsd_init`; a panic during the rest of kernel
+startup, `bsd_init`, the display probe, PMIC/ACPM or UFS is therefore
+captured. Dump the full 2 MiB so both records
 are captured. The ring is mapped uncached with `ml_io_map`, so it does not
 depend on the UFS driver or the BSD disk stack; `e1slog=0` disables it. The
 loader excludes the whole 2 MiB reservation from the RAM window it publishes

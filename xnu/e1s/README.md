@@ -20,6 +20,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0011-e1s-log.patch` | builds, untested | mirrors `_cnputs` output after `bsd_init` into a 1 MiB ring at `0x91300000`; dump 2 MiB at `0x91200000`; `e1slog=0` disables |
 | `0012-e1s-boot-marker.patch` | builds, untested | pre-MMU checkpoint marker at `0x912ff000+8`; the loader writes `E1SMARK1`, XNU marks checkpoints 1-4 |
 | `0013-e1s-rootauth.patch` | builds, untested | APFS answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root on E1S builds, so a locally built APFS root can pass `bsd_init` with `rd=ufsroot0` |
+| `0014-e1s-early-log.patch` | builds, untested | installs the `0x91300000` console ring in `kernel_bootstrap` (after `vm_mem_bootstrap`), not in `bsd_init`, so early panics are recorded |
 
 ### Touch (0003)
 
@@ -258,6 +259,20 @@ image has no Apple signature to verify. `rd=md0` images never reach the command.
 
 The patch applies and the kernel builds, but no APFS container has been mounted
 from `/dev/ufsroot0` on the phone.
+
+### Early console ring (0014)
+
+`0014-e1s-early-log.patch` moves the `e1s_log_init()` call from `bsd_init`
+(where `0011` put it) to `kernel_bootstrap()`, immediately after
+`vm_mem_bootstrap()` creates the kernel map. The ring at `0x91300000` is then
+recording before `console_init()` and before the rest of the machine startup,
+so a panic in `bsd_init`, the display/PMIC/UFS probes, or the startup path
+itself is recoverable from the phone. `bsd_init` no longer installs it, so the
+ring is reset exactly once.
+
+The install still uses `ml_io_map` and `PE_parse_boot_argn`, both available at
+that point; it prints a "cannot map" line and disables the ring if the mapping
+fails, without stopping the boot. `e1slog=0` still disables it.
 
 ### SMP (optional)
 

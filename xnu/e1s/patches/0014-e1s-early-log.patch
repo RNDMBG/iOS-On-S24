@@ -1,0 +1,34 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -99,7 +99,6 @@
+ extern void e1s_pmic_init(void);
+ extern void e1s_battery_init(void);
+ extern void e1s_display_probe(void);
+-extern void e1s_log_init(void);
+ extern void e1s_ufs_probe(void);
+ extern void e1s_camera_probe(void);
+ #endif
+@@ -993,7 +992,6 @@
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
+ #if defined(E1S)
+-		e1s_log_init();                 /* persistent console ring at 0x91300000 */
+ 		e1s_display_probe();            /* framebuffer and, opt-in, DECON/DSIM */
+ 		e1s_pmic_init();                /* ACPM/PMIC probe; power-key source */
+ #endif
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -433,6 +433,11 @@
+ 
+ 	kernel_bootstrap_log("vm_mem_bootstrap");
+ 	vm_mem_bootstrap();
++#if defined(ARM64_BOARD_CONFIG_E1S)
++	/* the console ring has to be up before the first panic can happen */
++	extern void e1s_log_init(void);
++	e1s_log_init();
++#endif
+ 
+ 	machine_info.memory_size = (uint32_t)mem_size;
+ #if XNU_TARGET_OS_OSX

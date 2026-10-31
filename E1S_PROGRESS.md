@@ -1182,3 +1182,49 @@ The `rd=ufsroot0` path is still not device-tested. The current images use
 putting one there means writing USERDATA, which this project does not do during
 probe work. No image has been flashed, no phone screen or `0x91200000` dump
 exists, and the new handler has not run on hardware.
+
+## 2026-10-31 - console ring before bsd_init
+
+The ring from `0011` was installed in `bsd_init`, which is late: a panic while
+the kernel starts up, before the BSD init reaches the devfs mount, left only
+the loader record and marker 4. `0014-e1s-early-log.patch` moves the install
+to `kernel_bootstrap()`, immediately after `vm_mem_bootstrap()` has created the
+kernel map and before `console_init()`. `bsd_init` no longer installs it, so
+the ring is reset once per boot and nothing written earlier is lost.
+
+Everything from that point is now mirrored at `0x91300000`: the rest of
+`kernel_bootstrap`, `arm_init`'s remaining work if it panics, `bsd_init`, the
+display/PMIC/UFS probes, and any panic. The ring still uses `ml_io_map` and
+does not lock or block, so it is usable from panic context. `e1slog=0` still
+disables it; the loader record at `0x91200000` is unaffected.
+
+`mach.development.e1s` links at 16,244,424 bytes, SHA-256
+`83e7e75696764fd4e0c2cabfdf690d65bf755db3399f9dec998c559b1dbf7584`; the build
+still stops only in the known `check_all_exports` pass. The kernel contains
+both `e1s-log: console ring at physical` and the new call sites.
+`tools/e1s/test_e1s_earlylog.py` passes with the other host checks; CI runs it.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,244,424 | `83e7e75696764fd4e0c2cabfdf690d65bf755db3399f9dec998c559b1dbf7584` |
+| `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `f5675c19cd2b2268127e32a1eb4fca8cd9d7be3d01edd63d7a022781fdbce467` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `bcd456aee8c358132fd0e0b7ba3a481ba72b0b407a31f5f13d2de32e06157e81` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `c6a467c193761183c4e094ea52f912a45ff32d4be973ab9067dc2af7f3dbd830` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `aa7bc977b140354250b980b6dd72cafddd3be6ccf21f6de885ac722c705c8525` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7d7c1cd207ea814429c3c411a3de55a5cd8490eef66c68454078710660dd006d` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `0d30421bad915198a475cbf861ec7396f1c123dfa682613c3ccb2c898f0ea098` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `e615e8270dd59e1bd3a94a902a4c117764311fc75b698dd962f3b7ded4d48a94` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `c7dff27be1c75b75fac80588ff17b59c05d932e38057a2b0a1f0f15e2e63ce53` |
+
+The APFS `ROOT`, `MD1` and `/sbin/launchd` bytes are unchanged
+(`dc29c22f...`, `45ebf1c2...`, `93041871...`); only the kernel inside the
+payload changed. The kernel hash depends on the absolute build path.
+
+This is still a build result. No image has been flashed, no phone screen or
+`0x91200000` dump exists, and the early install has not run on hardware. If
+`ml_io_map` turns out to be too early on the phone, the failure is a printed
+line from `e1s_log_init` before `bsd_init` and the previous `bsd_init` install
+can be restored.

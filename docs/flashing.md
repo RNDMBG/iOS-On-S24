@@ -125,8 +125,8 @@ This build produced:
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `31a37b89690664363f84cb8c54c5591035c0e31cff940f6a54febffabd7ba95a` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `7a0515bac3d9995c0c98e048efdc95e9c9a76451159e02b78f2573260e8c4afe` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `e615e8270dd59e1bd3a94a902a4c117764311fc75b698dd962f3b7ded4d48a94` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `c7dff27be1c75b75fac80588ff17b59c05d932e38057a2b0a1f0f15e2e63ce53` |
 
 The stock kernel is 37,640,704 bytes with `image_size` 40,173,568; the stub's
 header reserves 42,270,720 bytes (0x2850000), so S-Boot places the DTB after
@@ -221,8 +221,8 @@ cs_enforcement_disable=1`.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `e3d1987fe3cfdb7dc82cfe92b5453b9cc7aedfef7f13a1cf7c20b856f4fa6244` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `2efbe93037a556baea420e166752265f5ae34d461653cbc0ddd7436b0d6ccd21` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7d7c1cd207ea814429c3c411a3de55a5cd8490eef66c68454078710660dd006d` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `0d30421bad915198a475cbf861ec7396f1c123dfa682613c3ccb2c898f0ea098` |
 
 ### APFS root variant (optional)
 
@@ -239,8 +239,8 @@ userland.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `501c2ce19d33c4c044c85d60fd1dd19af0319d9060a0724cae1f365fcd19e9f6` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `359f079160e28a2f07727b857040f558e755d62979aaf546e4e5e3e2476708c2` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
 
 This build produced:
 
@@ -257,13 +257,15 @@ This build's SHA-256 values:
 - `shim/e1s-xnu/out/Image`:
   `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`
 - `e1s-boot-touch.img`:
-  `e4f6a7601fa2f097ad9c1dd4cedc271cfd1d53d0dec174c95d3715374d2e4118`
+  `f5675c19cd2b2268127e32a1eb4fca8cd9d7be3d01edd63d7a022781fdbce467`
 - `e1s-boot-touch.img.tar`:
-  `2f914994a51ea27330b6d2c519241270161324feae349e78d0e7b060bdf4a508`
+  `bcd456aee8c358132fd0e0b7ba3a481ba72b0b407a31f5f13d2de32e06157e81`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`
-(RTC calendar), `0010` (display state) and `0011` (persistent console ring). The command line has no `e1spmic`, `e1sbattery`,
+(RTC calendar), `0010` (display state), `0011` (persistent console ring),
+`0013` (APFS root auth) and `0014` (the ring is installed in
+`kernel_bootstrap`, before `bsd_init`). The command line has no `e1spmic`, `e1sbattery`,
 `e1srtc`, `e1sdisp`, `e1slog`, `e1scam` or `rd=ufsroot0` argument, so the
 image uses the defaults: PMIC reads only (mode 1), battery reads only, RTC
 sets the calendar, the display report prints the framebuffer summary, the log

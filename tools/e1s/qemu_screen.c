@@ -32,14 +32,14 @@
 #ifdef E1S_PHONE_VALUES
 #define INFO_FB_BASE     0xFA200000UL
 #define INFO_FB_SIZE     0x9A4000ULL
-#define INFO_PAYLOAD     24650908ULL
+#define INFO_PAYLOAD     24650860ULL
 #define INFO_NSEGS       12
 #define INFO_ADT_SIZE    16748
 #define INFO_CMDLINE     "debug=0x14e cpus=1 keepsyms=1 -v launchdsuffix=release rd=md0 cs_enforcement_disable=1"
 #else
 #define INFO_FB_BASE     FB_BASE
 #define INFO_FB_SIZE     ((uint64_t)FB_WIDTH * FB_HEIGHT * 4U)
-#define INFO_PAYLOAD     16262016ULL
+#define INFO_PAYLOAD     16262084ULL
 #define INFO_NSEGS       10
 #define INFO_ADT_SIZE    16644
 #define INFO_CMDLINE     "debug=0x14e cpus=1 keepsyms=1 -v"

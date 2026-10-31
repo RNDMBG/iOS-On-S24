@@ -63,8 +63,8 @@ Produced with the current kernel:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-smp.img` | 16,396,304 | `0f1807edc078f253223b52ce12d68043be2f995d4e5d0e237abbb325dbc662de` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `cdc01b04ecf262b6497888c38c2b4da4ca286c4a2d958796948e23b95de1c5e0` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `c6a467c193761183c4e094ea52f912a45ff32d4be973ab9067dc2af7f3dbd830` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `aa7bc977b140354250b980b6dd72cafddd3be6ccf21f6de885ac722c705c8525` |
 
 ## What to look for
 

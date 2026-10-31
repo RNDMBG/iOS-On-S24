@@ -156,6 +156,10 @@ builds the real HackiOS base instead of the old SWEET series:
   builds only, so `bsd_init` can keep a locally built APFS root instead of
   panicking on the missing Apple seal. `rd=md0` already skipped the check; this
   is the `rd=ufsroot0` path. Untested on the phone.
+- `xnu/e1s/patches/0014-e1s-early-log.patch`: installs the `0x91300000`
+  console ring in `kernel_bootstrap`, right after `vm_mem_bootstrap`, instead
+  of waiting for `bsd_init`, so a panic during kernel startup is recorded.
+  Untested on the phone.
 - `shim/e1s-xnu/`: loader that copies a `SWEETXNU` payload to an XNU RAM
   window and jumps to XNU. The window comes from the S-Boot DTB's `/memory`
   and `/reserved-memory` nodes (the fallback is `0xA0000000`; the old
@@ -258,10 +262,10 @@ how far a failed boot got. The flash procedure is in
 | File | Size | SHA-256 |
 | --- | ---: | --- |
 | `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `e4f6a7601fa2f097ad9c1dd4cedc271cfd1d53d0dec174c95d3715374d2e4118` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `2f914994a51ea27330b6d2c519241270161324feae349e78d0e7b060bdf4a508` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `0f1807edc078f253223b52ce12d68043be2f995d4e5d0e237abbb325dbc662de` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `cdc01b04ecf262b6497888c38c2b4da4ca286c4a2d958796948e23b95de1c5e0` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `f5675c19cd2b2268127e32a1eb4fca8cd9d7be3d01edd63d7a022781fdbce467` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `bcd456aee8c358132fd0e0b7ba3a481ba72b0b407a31f5f13d2de32e06157e81` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `c6a467c193761183c4e094ea52f912a45ff32d4be973ab9067dc2af7f3dbd830` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `aa7bc977b140354250b980b6dd72cafddd3be6ccf21f6de885ac722c705c8525` |
 
 The diagnostic images boot one static Mach-O as PID 1. `out/e1s-boot-md0.img`
 appends the raw Mach-O as the `md0` RAMDisk and lets `mockfs` resolve
@@ -275,10 +279,10 @@ the host. Neither is an iOS rootfs, and neither has run on the phone. See
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `e3d1987fe3cfdb7dc82cfe92b5453b9cc7aedfef7f13a1cf7c20b856f4fa6244` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `2efbe93037a556baea420e166752265f5ae34d461653cbc0ddd7436b0d6ccd21` |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `501c2ce19d33c4c044c85d60fd1dd19af0319d9060a0724cae1f365fcd19e9f6` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `359f079160e28a2f07727b857040f558e755d62979aaf546e4e5e3e2476708c2` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `7d7c1cd207ea814429c3c411a3de55a5cd8490eef66c68454078710660dd006d` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `0d30421bad915198a475cbf861ec7396f1c123dfa682613c3ccb2c898f0ea098` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
 
 ### Stock-kernel boot screen and menu
 
@@ -303,8 +307,8 @@ combinations are not verified on `e1s`.
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `31a37b89690664363f84cb8c54c5591035c0e31cff940f6a54febffabd7ba95a` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `7a0515bac3d9995c0c98e048efdc95e9c9a76451159e02b78f2573260e8c4afe` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `e615e8270dd59e1bd3a94a902a4c117764311fc75b698dd962f3b7ded4d48a94` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `c7dff27be1c75b75fac80588ff17b59c05d932e38057a2b0a1f0f15e2e63ce53` |
 
 Build the stock-kernel image with:
 
