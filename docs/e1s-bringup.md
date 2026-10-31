@@ -67,6 +67,7 @@ What is e1s-specific so far:
 | S2MPS27 RTC and calendar epoch | `0009` | builds, untested |
 | DECON/DSIM/RDMA framebuffer probe | `0010` | builds, untested |
 | Persistent console ring | `0011` | builds, untested |
+| APFS root authentication | `0013` | builds, untested; answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root |
 | Boot framebuffer from S-Boot DTB | `shim/e1s-xnu/fdt.c` | builds, untested |
 | ADT / NVRAM / identity nodes | `tools/e1s/xnu/mkadt.py` | host test passes |
 
@@ -248,6 +249,16 @@ host state left by S-Boot instead of re-running PHY/UNIPRO/CPORT calibration:
   `ufs_lun=N` selects the LUN (default 0).
 - One 1 MiB contiguous allocation holds the SQ, CQ, UCD/PRDT and bounce buffer;
   caches are flushed around each command because the host is not coherent.
+
+The kernel's APFS driver originally returned `ENOTTY` for every ioctl, so after
+`VFS_ROOT` `bsd_init` panicked with `rootvp not authenticated after mounting`
+for any root that was not `md0`. `0013` answers `FSIOC_KERNEL_ROOTAUTH` for the
+mounted root vnode on E1S builds and prints
+`apfs: e1s root volume accepted without Apple sealing`. It does not change
+`bsd_rooted_ramdisk()` and does not touch any other filesystem; the pinned
+HackiOS base is unmodified. The path is built but untested: no APFS container
+has been read from `/dev/ufsroot0` on the phone, and the current test images
+still use `rd=md0`, which skips the command entirely.
 
 The driver compiles and the patch applies, but **no command has been issued on
 the phone**. The first test image only calls `e1s_ufs_probe()` during

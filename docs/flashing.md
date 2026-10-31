@@ -125,8 +125,8 @@ This build produced:
 | `out/e1s-boot-android.img.tar` | 39,751,680 | `e4b5f08912930606cb63b598f2f77013d2deb3cfb143a5c3edcca40ebf08ceff` |
 | `out/e1s-boot-menu.img` | 39,743,504 | `94f52a80fe7a6ea6070327fed1320d5844eaa469eb80d0921e956d9faef1bf5a` |
 | `out/e1s-boot-menu.img.tar` | 39,751,680 | `97051b027556dd92620df3730a3ff468ef428feb5ceafd20bcd46c4e336a8b35` |
-| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `2b865187795c2388591e81745c40ddfcd9dfbb1d73aecc7cc57e8066d899abe3` |
-| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `82de8c49fdf4d1a65433430b9a3dfccbb8e44833c4a4f40ac4afa7a009da4ca6` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `31a37b89690664363f84cb8c54c5591035c0e31cff940f6a54febffabd7ba95a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `7a0515bac3d9995c0c98e048efdc95e9c9a76451159e02b78f2573260e8c4afe` |
 
 The stock kernel is 37,640,704 bytes with `image_size` 40,173,568; the stub's
 header reserves 42,270,720 bytes (0x2850000), so S-Boot places the DTB after
@@ -221,8 +221,8 @@ cs_enforcement_disable=1`.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `a28e788bf26176e47e121f23d1bafabb078097ea80a5f3ea8a021481eff2f2d0` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `216b3e05340e756b07dac10ec783d0540b464d1088c92442a137aabee4d328e3` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `e3d1987fe3cfdb7dc82cfe92b5453b9cc7aedfef7f13a1cf7c20b856f4fa6244` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `2efbe93037a556baea420e166752265f5ae34d461653cbc0ddd7436b0d6ccd21` |
 
 ### APFS root variant (optional)
 
@@ -239,8 +239,8 @@ userland.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `56bbc1417e8e4ffebc63f93542760e7c6db3748d0e8d874c4c0d161f8caf5271` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `74074340967106665c4557513e70b159a9b00e577bcea3952b606a9e9c8f03ad` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `501c2ce19d33c4c044c85d60fd1dd19af0319d9060a0724cae1f365fcd19e9f6` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `359f079160e28a2f07727b857040f558e755d62979aaf546e4e5e3e2476708c2` |
 
 This build produced:
 
@@ -253,13 +253,13 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `8857a91a01ee634870b3cae532942e0f29139b772210a19699c11d88fbea1001`
+  `1eacdadfb11b0c178a09903fbb35b94fc576310fbc4dfe03d77424581ce7b236`
 - `shim/e1s-xnu/out/Image`:
   `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`
 - `e1s-boot-touch.img`:
-  `0238afae4e61d324c9c7f22eb798a733cbdda7e38a321b8dcf27863e613c6793`
+  `e4f6a7601fa2f097ad9c1dd4cedc271cfd1d53d0dec174c95d3715374d2e4118`
 - `e1s-boot-touch.img.tar`:
-  `0c7488717957e975bbeef5b670d6c78a48599ae81851c674b60cd766e35f22b0`
+  `2f914994a51ea27330b6d2c519241270161324feae349e78d0e7b060bdf4a508`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`

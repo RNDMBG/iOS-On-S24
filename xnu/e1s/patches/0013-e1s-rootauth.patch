@@ -1,0 +1,29 @@
+diff --git a/bsd/miscfs/apfs/apfs_vnops.c b/bsd/miscfs/apfs/apfs_vnops.c
+--- a/bsd/miscfs/apfs/apfs_vnops.c
++++ b/bsd/miscfs/apfs/apfs_vnops.c
+@@ -12,6 +12,7 @@
+ #include <sys/attr.h>
+ #include <sys/dirent.h>
+ #include <sys/errno.h>
++#include <sys/fsctl.h>
+ #include <sys/namei.h>
+ #include <sys/stat.h>
+ #include <sys/systm.h>
+@@ -1194,6 +1195,17 @@
+ static int
+ apfs_vnop_ioctl(__unused struct vnop_ioctl_args *ap)
+ {
++#if defined(ARM64_BOARD_CONFIG_E1S)
++	/*
++	 * The e1s root is a locally built APFS image and has no Apple seal, so
++	 * report the mounted root volume as authenticated. bsd_init asks for
++	 * this after set_rootvnode() and panics when the filesystem refuses.
++	 */
++	if (ap->a_command == FSIOC_KERNEL_ROOTAUTH && ap->a_vp == rootvnode) {
++		printf("apfs: e1s root volume accepted without Apple sealing\n");
++		return 0;
++	}
++#endif
+ 	return ENOTTY;
+ }
+ 

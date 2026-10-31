@@ -1124,3 +1124,61 @@ phone.
 All twenty host checks pass. No image has been flashed and no phone screen or
 `0x91200000` dump exists; the md1 mount and the APFS root mount are unverified
 on hardware.
+
+## 2026-10-31 - APFS root authentication for rd=ufsroot0
+
+The APFS driver returned `ENOTTY` for every ioctl. That is correct for an
+ordinary filesystem call, but `bsd_init` enforces `FSIOC_KERNEL_ROOTAUTH` on
+`rootvnode` after `VFS_ROOT` for every root that is not `rd=md0`, so a real
+APFS root ended in `panic: rootvp not authenticated after mounting`. The `md0`
+images never reach the command, which is why the smoke tests could not expose
+it.
+
+`0013-e1s-rootauth.patch` adds one case to `apfs_vnop_ioctl()`:
+
+- On `ARM64_BOARD_CONFIG_E1S` builds, `FSIOC_KERNEL_ROOTAUTH` on the mounted
+  root (`ap->a_vp == rootvnode`) returns 0 and prints
+  `apfs: e1s root volume accepted without Apple sealing`.
+- Every other command still returns `ENOTTY`, and any other vnode is refused.
+- `bsd_rooted_ramdisk()` and `bsd_init.c` are unchanged; the exception lives in
+  the APFS driver, so `rd=ufsroot0` is the only path that changes.
+- The pinned HackiOS base in `xnu/hackios/` is untouched.
+
+This is a bring-up exception, not a signature check: the root image is built
+locally and has no Apple seal to verify. It is compiled only into the E1S
+machine build.
+
+`mach.development.e1s` links at 16,244,472 bytes, SHA-256
+`1eacdadfb11b0c178a09903fbb35b94fc576310fbc4dfe03d77424581ce7b236`;
+the build still stops only in the known `check_all_exports` pass. The kernel
+contains the new string, and `tools/e1s/test_e1s_rootauth.py` passes together
+with the other host checks; CI runs it.
+
+All XNU-bearing images were repacked with the new kernel. The loader Image did
+not change.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `mach.development.e1s` | 16,244,472 | `1eacdadfb11b0c178a09903fbb35b94fc576310fbc4dfe03d77424581ce7b236` |
+| `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
+| `out/e1s-boot-touch.img` | 16,388,112 | `e4f6a7601fa2f097ad9c1dd4cedc271cfd1d53d0dec174c95d3715374d2e4118` |
+| `out/e1s-boot-touch.img.tar` | 16,394,240 | `2f914994a51ea27330b6d2c519241270161324feae349e78d0e7b060bdf4a508` |
+| `out/e1s-boot-smp.img` | 16,396,304 | `0f1807edc078f253223b52ce12d68043be2f995d4e5d0e237abbb325dbc662de` |
+| `out/e1s-boot-smp.img.tar` | 16,404,480 | `cdc01b04ecf262b6497888c38c2b4da4ca286c4a2d958796948e23b95de1c5e0` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `e3d1987fe3cfdb7dc82cfe92b5453b9cc7aedfef7f13a1cf7c20b856f4fa6244` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `2efbe93037a556baea420e166752265f5ae34d461653cbc0ddd7436b0d6ccd21` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `501c2ce19d33c4c044c85d60fd1dd19af0319d9060a0724cae1f365fcd19e9f6` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `359f079160e28a2f07727b857040f558e755d62979aaf546e4e5e3e2476708c2` |
+| `out/e1s-boot-menu-xnu.img` | 60,428,304 | `31a37b89690664363f84cb8c54c5591035c0e31cff940f6a54febffabd7ba95a` |
+| `out/e1s-boot-menu-xnu.img.tar` | 60,436,480 | `7a0515bac3d9995c0c98e048efdc95e9c9a76451159e02b78f2573260e8c4afe` |
+
+The kernel hash depends on the absolute build path because the path is embedded
+in the binary; these values are from `~/e1s-build/irq`. The APFS `ROOT` and
+`MD1` containers and `/sbin/launchd` are byte-identical to the previous build
+(`dc29c22f...`, `45ebf1c2...`, `93041871...`), so only the kernel changed.
+
+The `rd=ufsroot0` path is still not device-tested. The current images use
+`rd=md0`, which skips the command, and there is no APFS partition on the phone;
+putting one there means writing USERDATA, which this project does not do during
+probe work. No image has been flashed, no phone screen or `0x91200000` dump
+exists, and the new handler has not run on hardware.

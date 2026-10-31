@@ -19,6 +19,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0010-e1s-display.patch` | builds, untested | framebuffer summary plus an opt-in read-only DECON0..3 / window / RDMA / DSIM0-1 / DCPHY0 dump; `e1sdisp=2` |
 | `0011-e1s-log.patch` | builds, untested | mirrors `_cnputs` output after `bsd_init` into a 1 MiB ring at `0x91300000`; dump 2 MiB at `0x91200000`; `e1slog=0` disables |
 | `0012-e1s-boot-marker.patch` | builds, untested | pre-MMU checkpoint marker at `0x912ff000+8`; the loader writes `E1SMARK1`, XNU marks checkpoints 1-4 |
+| `0013-e1s-rootauth.patch` | builds, untested | APFS answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root on E1S builds, so a locally built APFS root can pass `bsd_init` with `rd=ufsroot0` |
 
 ### Touch (0003)
 
@@ -240,6 +241,23 @@ The page is the last page of the first MiB of `sec_debug_next`, just before the
 `E1SXNU02` ring. `tools/e1s/read_log.py` scans for the magic and prints the
 checkpoint. The loader and kernel build, and the host test passes, but no
 marker has been read from the phone.
+
+### Root authentication (0013)
+
+`0013-e1s-rootauth.patch` completes the non-ramdisk root path. `bsd_init`
+enforces `FSIOC_KERNEL_ROOTAUTH` after `VFS_ROOT` for every root that is not
+`rd=md0`. The APFS driver returned `ENOTTY` for every ioctl, so a real APFS root
+ended in `panic: rootvp not authenticated after mounting`.
+
+The patch handles that one command in `apfs_vnop_ioctl()`: on E1S builds, when
+the vnode is the mounted root (`rootvnode`), it returns success and prints
+`apfs: e1s root volume accepted without Apple sealing`. Every other command
+still returns `ENOTTY`, and the global `bsd_rooted_ramdisk()` check is
+unchanged. This is a bring-up exception, not a seal check: the locally built
+image has no Apple signature to verify. `rd=md0` images never reach the command.
+
+The patch applies and the kernel builds, but no APFS container has been mounted
+from `/dev/ufsroot0` on the phone.
 
 ### SMP (optional)
 
