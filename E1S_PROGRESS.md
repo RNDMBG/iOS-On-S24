@@ -1256,3 +1256,6 @@ writes PNGs.
 columns and, when the APFS image exists, runs the boot-flow capture too. The
 WSL test passes. No kernel or boot image changed; the existing image hashes
 remain valid.
+`tools/e1s/render_boot.c` and `render_boot.sh` render the same loader frames to
+`out/e1s-boot-render.mp4` (1080x2340, 30 fps, 12.6 s). The console frames are
+the expected log; one footer line says they are not a phone capture.
