@@ -29,7 +29,7 @@ build_variant() {
 	"$CC" -O2 -static -ffreestanding -nostdlib -fno-pic \
 		-mgeneral-regs-only -mstrict-align -fno-stack-protector \
 		-Wall -Wextra -Werror -I "$REPO/shim/e1s-xnu" $extra \
-		-T "$REPO/shim/e1s/loader.ld" -Wl,--build-id=none \
+		-T "$HERE/qemu.ld" -Wl,--build-id=none \
 		-Wl,-e,_head -Wl,-z,noseparate-code \
 		"$REPO/shim/e1s/start.S" "$HERE/qemu_screen.c" \
 		"$REPO/shim/e1s-xnu/ui.c" -o "$elf"
@@ -63,7 +63,8 @@ run_variant() {
 	fi
 	cp "$shot_tmp" "$shot"
 	rm -f "$shot_tmp"
-	ls -l "$shot"
+	python3 "$HERE/ppm2png.py" "$shot" "${shot%.ppm}.png"
+	ls -l "$shot" "${shot%.ppm}.png"
 }
 
 build_variant "" "$OUT/loader-ui.elf" "$OUT/Image"

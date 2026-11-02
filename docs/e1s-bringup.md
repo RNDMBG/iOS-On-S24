@@ -533,6 +533,23 @@ XNU: the XNU e1s payload expects the Exynos GIC/timer, the S-Boot DTB, and the
 `0xFA200000` scanout, so it cannot boot on `-M virt`. Treat the output as a
 screen simulation only.
 
+`tools/e1s/qemu_boot.sh` reads a built image instead of using fixed values:
+`qemu_bootinfo.py` parses the Samsung boot v4 header and the SWEETXNU payload,
+then the same `ui.c` draws the loader with that image's segment count, payload
+size, ADT size, entry point, and command line. The stage rows animate and the
+second frame is the expected XNU console. Outputs are `boot.png` and
+`console.png` in `out/qemu-screen/`. `tools/e1s/qemu_boot_video.sh` captures
+the slow stage sequence and `tools/e1s/make_boot_gif.py` (Pillow) assembles
+`boot-preview.gif`. The console frame is labelled on-screen as simulated and
+is not evidence from the phone.
+
+The harness is linked at `0x40080000`, the address QEMU loads `-kernel` at.
+Earlier captures were linked at 0, so absolute pointer tables (device labels,
+stage names, console lines) resolved into the DTB area and those rows came out
+blank. `qemu.ld` fixes the load address, `shim/e1s/start.S` records `image_size` as
+`_end - _head` (identical at base 0, correct at any base), and
+`test_e1s_qemu_screen.py` now fails if the label or value columns have no ink.
+
 `run_qemu.ps1 -Display` adds QEMU's `ramfb` device and an SDL window. The probe
 draws a 1080x2340 portrait framebuffer (the SM-S921B resolution), prints the
 simulated S24 banner, and halts with the window open. The host window may be

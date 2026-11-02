@@ -329,9 +329,13 @@ The previews are `out/e1s-s24-boot-android.png` and
 `tools/e1s/qemu_screen.sh` draws the real XNU loader UI
 (`shim/e1s-xnu/ui.c`) on QEMU's ramfb into `out/qemu-screen/screen.ppm`, plus
 `screen-phone.ppm` with the e1s panel values (scanout `0xFA200000`, the
-24,650,908-byte/12-segment APFS payload, `rd=md0`). It is a screen simulation
+24,650,860-byte/12-segment APFS payload, `rd=md0`). It is a screen simulation
 that executes no XNU code and no Exynos hardware; `screen-phone.ppm` is what
 the panel should look like on the phone, not a phone capture.
+`tools/e1s/qemu_boot.sh` uses the values parsed from a built image and also
+writes `boot.png` and `console.png`; `tools/e1s/qemu_boot_video.sh` plus
+`tools/e1s/make_boot_gif.py` produce `out/qemu-screen/boot-preview.gif`. The
+console frame is labelled as expected output, not a log from the phone.
 
 ## Building
 

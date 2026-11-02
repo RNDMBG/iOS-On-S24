@@ -5,7 +5,7 @@ _head:
 	b	_start
 	.long	0
 	.quad	0x80000
-	.quad	_end
+	.quad	_end - _head
 	.quad	0xa
 	.quad	0
 	.quad	0

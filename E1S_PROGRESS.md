@@ -1228,3 +1228,31 @@ This is still a build result. No image has been flashed, no phone screen or
 `ml_io_map` turns out to be too early on the phone, the failure is a printed
 line from `e1s_log_init` before `bsd_init` and the previous `bsd_init` install
 can be restored.
+
+## 2026-11-02 - QEMU boot-flow preview from the built image
+
+`tools/e1s/qemu_boot.sh` now reads `out/e1s-boot-apfs.img` and draws the loader
+with the image's own values: 12 segments, 24,650,860-byte payload, 16,748-byte
+ADT, entry `0xfffffff0074264a8`, and the full `rd=md0` command line. The loader
+UI (`shim/e1s-xnu/ui.c`) animates the nine stage rows and ends at 100%; a
+second frame draws the expected XNU console with an on-screen
+`SIMULATED BOOT CONSOLE - NO XNU EXECUTED` banner. `qemu_boot_video.sh` captures
+the slow sequence and `make_boot_gif.py` assembles
+`out/qemu-screen/boot-preview.gif`. XNU still does not run: `-M virt` has RAM at
+`0x40000000` and none of the Exynos MMIO the kernel expects, so the console
+frame is expected output, not a device log.
+
+The first captures exposed a harness bug, not a UI bug. The program was linked
+at 0 while QEMU loads `-kernel` at `0x40080000`; PC-relative text worked, but
+absolute pointer tables (device labels, stage names, console lines) resolved
+into the DTB area, leaving the label rows blank and the stage list empty.
+`qemu.ld` links the harness at the load address. `shim/e1s/start.S` now records
+the arm64 `image_size` as `_end - _head`, which is unchanged for the base-0
+probe image and correct for any other base. `qemu_bootinfo.py` and
+`ppm2png.py` are new; `qemu_screen.sh` uses the same linker script and also
+writes PNGs.
+
+`test_e1s_qemu_screen.py` now requires ink in the loader label and value
+columns and, when the APFS image exists, runs the boot-flow capture too. The
+WSL test passes. No kernel or boot image changed; the existing image hashes
+remain valid.
