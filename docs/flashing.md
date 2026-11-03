@@ -221,8 +221,8 @@ cs_enforcement_disable=1`.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `7d7c1cd207ea814429c3c411a3de55a5cd8490eef66c68454078710660dd006d` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `0d30421bad915198a475cbf861ec7396f1c123dfa682613c3ccb2c898f0ea098` |
+| `out/e1s-boot-md0.img` | 16,404,496 | `0411be9c82b0f7a96effe4628d22541c2896c3878560e6439109c6434a22f78a` |
+| `out/e1s-boot-md0.img.tar` | 16,414,720 | `1b76599975f05f422158459811ad79807e2bbb2d6a53fcd5f0389326665127de` |
 
 ### APFS root variant (optional)
 
@@ -239,8 +239,8 @@ userland.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
+| `out/e1s-boot-apfs.img` | 24,776,720 | `652bb56f85955081241dc126e83160c32a0c4b41958e16135ac9118fee36f59d` |
+| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `01f19b2a1eccc57fb424c0768d8118ca41e314918ec9f3e23defc846518f3002` |
 
 This build produced:
 
@@ -253,13 +253,13 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `1eacdadfb11b0c178a09903fbb35b94fc576310fbc4dfe03d77424581ce7b236`
+  `c0a3eb09872ecc480a77df6e6170565272f3db9d2591d2c7d0883efc445bb95d`
 - `shim/e1s-xnu/out/Image`:
   `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`
 - `e1s-boot-touch.img`:
-  `f5675c19cd2b2268127e32a1eb4fca8cd9d7be3d01edd63d7a022781fdbce467`
+  `cdd1ce68f8bcbdc9359c0a5830447550f5477a0cfaeca69d5e101d8b2fba3034`
 - `e1s-boot-touch.img.tar`:
-  `bcd456aee8c358132fd0e0b7ba3a481ba72b0b407a31f5f13d2de32e06157e81`
+  `34df24ea5a5c8655d39080ba75bad0276292f6228ca4b026b82ab3dda42f1d03`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`
