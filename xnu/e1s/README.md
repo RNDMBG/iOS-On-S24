@@ -21,6 +21,7 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0012-e1s-boot-marker.patch` | builds, untested | pre-MMU checkpoint marker at `0x912ff000+8`; the loader writes `E1SMARK1`, XNU marks checkpoints 1-4 |
 | `0013-e1s-rootauth.patch` | builds, untested | APFS answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root on E1S builds, so a locally built APFS root can pass `bsd_init` with `rd=ufsroot0` |
 | `0014-e1s-early-log.patch` | builds, untested | installs the `0x91300000` console ring in `kernel_bootstrap` (after `vm_mem_bootstrap`), not in `bsd_init`, so early panics are recorded |
+| `0015-e1s-video-console.patch` | builds, untested | clears the loader framebuffer once at the first graphics-mode console init, so the XNU banner starts on a black screen instead of under the loader UI |
 
 ### Touch (0003)
 

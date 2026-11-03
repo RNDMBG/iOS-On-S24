@@ -1259,3 +1259,22 @@ remain valid.
 `tools/e1s/render_boot.c` and `render_boot.sh` render the same loader frames to
 `out/e1s-boot-render.mp4` (1080x2340, 30 fps, 12.6 s). The console frames are
 the expected log; one footer line says they are not a phone capture.
+
+## 2026-11-03 - video console clears the loader UI (0015)
+
+The loader leaves its stage list and progress bar in the framebuffer, so a
+real `-v` boot would print the XNU banner on top of the loader screen. `0015`
+clears the framebuffer once, at the first `kPEGraphicsMode` handoff in
+`initialize_screen()`, before `gc_initialize()`. It is compiled only for `E1S`
+and only touches a 32-bit direct framebuffer.
+
+The kernel links at 16,244,456 bytes and the build still stops at the known
+`check_all_exports` check. `out/e1s-boot-apfs.img` was rebuilt with it:
+24,776,720 bytes, sha256 `652bb56f...`; the APFS `ROOT`, `MD1` and launchd
+bytes are unchanged. The touch, md0 and SMP images were rebuilt from the same
+kernel.
+
+The MP4 from the previous entry is still a host render of the loader, not a
+boot capture. No image has been flashed; there is no phone photo or
+`0x91200000` dump.
+

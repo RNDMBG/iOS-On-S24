@@ -1,0 +1,45 @@
+--- a/osfmk/console/video_console.c
++++ b/osfmk/console/video_console.c
+@@ -2788,6 +2788,29 @@
+ 	}
+ }
+ 
++#if defined(E1S)
++static boolean_t e1s_fb_cleared = FALSE;
++
++/*
++ * The loader leaves its UI in the framebuffer. Clear it once, on the first
++ * graphics-mode handoff, so the XNU log starts on a black screen.
++ */
++static void
++e1s_video_clear(struct vc_info * info)
++{
++	uint32_t *p;
++	size_t words;
++
++	if (info->v_depth != 32 || info->v_baseaddr == 0 ||
++	    info->v_rowbytes == 0 || info->v_height == 0)
++		return;
++	p = (uint32_t *)(uintptr_t)info->v_baseaddr;
++	words = (size_t)info->v_rowbytes / sizeof(*p) * info->v_height;
++	for (size_t i = 0; i < words; i++)
++		p[i] = 0;
++}
++#endif /* E1S */
++
+ void
+ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
+ {
+@@ -2925,6 +2948,12 @@
+ 			gc_ops.hide_cursor  = vc_reverse_cursor;
+ 			gc_ops.show_cursor  = vc_reverse_cursor;
+ 			gc_ops.update_color = vc_update_color;
++#if defined(E1S)
++			if (!e1s_fb_cleared && op == kPEGraphicsMode) {
++				e1s_video_clear(&vinfo);
++				e1s_fb_cleared = TRUE;
++			}
++#endif /* E1S */
+ 			gc_initialize(&vinfo);
+ 		}
+ 	}
