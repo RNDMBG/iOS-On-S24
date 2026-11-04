@@ -32,10 +32,20 @@ def read_ppm(path):
     width, height, maxval = fields
     if maxval != 255:
         raise SystemExit("ppm2png: %s: maxval %d unsupported" % (path, maxval))
-    pixels = data[pos:pos + width * height * 3]
-    if len(pixels) != width * height * 3:
-        raise SystemExit("ppm2png: %s: truncated pixel data" % path)
-    return width, height, pixels
+    stride = width * 3
+    body = data[pos:]
+    if len(body) == stride * height:
+        return width, height, body
+    # QEMU's PPM screendump writes rows padded to 4 bytes, so a frame whose
+    # width is not a multiple of 4 carries up to 3 pad bytes per row.
+    padded = (stride + 3) & ~3
+    if len(body) == padded * height:
+        pixels = bytearray(stride * height)
+        for y in range(height):
+            pixels[y * stride:(y + 1) * stride] = \
+                body[y * padded:y * padded + stride]
+        return width, height, bytes(pixels)
+    raise SystemExit("ppm2png: %s: truncated pixel data" % path)
 
 
 def write_png(path, width, height, pixels):

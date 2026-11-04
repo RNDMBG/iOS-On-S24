@@ -1278,3 +1278,24 @@ The MP4 from the previous entry is still a host render of the loader, not a
 boot capture. No image has been flashed; there is no phone photo or
 `0x91200000` dump.
 
+
+## 2026-11-04 - the boot video is a real capture
+
+`out/e1s-xnu-boot.mp4` (1126x2048, 30 fps, 32.4 s, 1.7 MB) is a screen
+recording of the `DEVELOPMENT_ARM64_BCM2837` kernel booting on QEMU `virt`,
+not a host render. The frames are the ramfb output of a single run; the
+encoder feeds them to ffmpeg at the rate the recorder actually sampled them
+(`frames/times.txt`), so the scroll speed is the boot's own.
+
+The run reaches `Darwin Kernel Version 22.5.0`, `BSD root: md0`,
+`*** SWEET userspace: init running as PID 1 ***` and the init's `still alive`
+heartbeats. The kernel path printed in the banner is the BCM2837 build; this
+is not the phone, and no image has been flashed.
+
+QEMU's PPM screendump turned out to pad rows to four bytes, so a 1125-wide
+frame is written as 3376 bytes per row instead of 3375. The guest
+framebuffer is correct (a `pmemsave` of `0x13de0e000` decodes cleanly); only
+the PPM was sheared. `tools/e1s/ppm2png.py` now drops the pad byte, and the
+encoder reads the padded stride directly. Recorded with
+`tools/e1s/_qemu_record.py` (30 fps timestamps) and encoded with
+`tools/e1s/_qemu_encode.py 270 1240`.
