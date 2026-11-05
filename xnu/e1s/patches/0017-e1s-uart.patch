@@ -1,0 +1,135 @@
+diff --git a/pexpert/pexpert/arm64/E1S.h b/pexpert/pexpert/arm64/E1S.h
+--- a/pexpert/pexpert/arm64/E1S.h
++++ b/pexpert/pexpert/arm64/E1S.h
+@@ -10,6 +10,7 @@
+ #define ARM_ARCH_TIMER
+ #define GENERIC_GIC_V3_IRQ 1
+ #define GENERIC_PSCI_SMP 1
++#define E1S_UART 1
+ 
+ #define __ARM_PAN_AVAILABLE__ 1
+ #define __ARM_ARCH__ 8
+diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -47,7 +47,8 @@
+ 	SERIAL_DOCKCHANNEL=0x2,
+ 	SERIAL_PI3_UART=0x4,
+ 	SERIAL_VMAPPLE_UART=0x8,
+-	SERIAL_DCC_UART=0x10
++	SERIAL_DCC_UART=0x10,
++	SERIAL_E1S_UART=0x20
+ } serial_device_t;
+ 
+ kern_return_t serial_irq_enable(serial_device_t device);
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -681,6 +681,88 @@
+ 
+ /*****************************************************************************/
+ 
++#ifdef E1S_UART
++
++/*
++ * The USI debug UART (PERIC0 0x10840000).  S-Boot prints its own log here,
++ * so the block is already on and at 115200 8N1; the console uses it without
++ * rewriting the divider.  The pads are gpg0-1 (RX) and gpg0-2 (TX), pin
++ * function 3.
++ */
++#define E1S_UART_PA             0x10840000UL
++#define E1S_UART_SIZE           0x100
++
++#define E1S_UART_ULCON          0x00
++#define E1S_UART_UCON           0x04
++#define E1S_UART_UTRSTAT        0x10
++#define E1S_UART_UTXH           0x20
++#define E1S_UART_URXH           0x24
++
++#define E1S_UART_UTRSTAT_RXREADY        (1U << 0)
++#define E1S_UART_UTRSTAT_TXREADY        (1U << 1)
++
++#define E1S_UART_UCON_TXMODE_MASK       0xcU
++#define E1S_UART_UCON_TXMODE_CPU        0x4U
++
++static vm_offset_t e1s_uart_base_vaddr;
++
++#define E1S_UART_REG(off)       (*(volatile uint32_t *)(e1s_uart_base_vaddr + (off)))
++
++static unsigned int
++e1s_uart_transmit_ready(void)
++{
++	return (E1S_UART_REG(E1S_UART_UTRSTAT) & E1S_UART_UTRSTAT_TXREADY) != 0;
++}
++
++static void
++e1s_uart_transmit_data(uint8_t c)
++{
++	E1S_UART_REG(E1S_UART_UTXH) = c;
++}
++
++static unsigned int
++e1s_uart_receive_ready(void)
++{
++	return (E1S_UART_REG(E1S_UART_UTRSTAT) & E1S_UART_UTRSTAT_RXREADY) != 0;
++}
++
++static uint8_t
++e1s_uart_receive_data(void)
++{
++	return (uint8_t)(E1S_UART_REG(E1S_UART_URXH) & 0xff);
++}
++
++static void
++e1s_uart_init(void)
++{
++	uint32_t lcon = E1S_UART_REG(E1S_UART_ULCON);
++	uint32_t ucon = E1S_UART_REG(E1S_UART_UCON);
++	uint32_t txcon = (ucon & ~E1S_UART_UCON_TXMODE_MASK) |
++	    E1S_UART_UCON_TXMODE_CPU;
++
++	/* Keep S-Boot's frame and clock select; only make TX polled. */
++	if ((lcon & 0x3) != 0x3) {
++		E1S_UART_REG(E1S_UART_ULCON) = (lcon & ~0x3U) | 0x3;
++	}
++	if (txcon != ucon) {
++		E1S_UART_REG(E1S_UART_UCON) = txcon;
++	}
++}
++
++SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) e1s_uart_serial_functions =
++{
++	.init = e1s_uart_init,
++	.transmit_ready = e1s_uart_transmit_ready,
++	.transmit_data = e1s_uart_transmit_data,
++	.receive_ready = e1s_uart_receive_ready,
++	.receive_data = e1s_uart_receive_data,
++	.device = SERIAL_E1S_UART
++};
++
++#endif /* E1S_UART */
++
++/*****************************************************************************/
++
+ /**
+  * Output @str onto every registered serial interface by polling.
+  *
+@@ -802,6 +884,18 @@
+ 	}
+ #endif /* VMAPPLE_UART */
+ 
++#ifdef E1S_UART
++	uint32_t e1s_uart_on = 1;
++
++	if (!PE_parse_boot_argn("e1suart", &e1s_uart_on, sizeof(e1s_uart_on)) ||
++	    e1s_uart_on != 0) {
++		e1s_uart_base_vaddr = ml_io_map(E1S_UART_PA, E1S_UART_SIZE);
++		if (e1s_uart_base_vaddr != 0) {
++			register_serial_functions(&e1s_uart_serial_functions);
++		}
++	}
++#endif /* E1S_UART */
++
+ #ifdef DOCKCHANNEL_UART
+ 	uint32_t no_dockchannel_uart = 0;
+ 	if (SecureDTFindEntry("name", "dockchannel-uart", &entryP) == kSuccess) {

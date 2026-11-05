@@ -239,8 +239,8 @@ userland.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,760,336 | `1054edbb0eb00408c30d3aea290a15a612c0481542fc411fc0c28e4e93e5c10d` |
-| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `18e1d84472cd7122b9e62eecb5ff2648487807151db6aaa0fd541a1afb1a5ab0` |
+| `out/e1s-boot-apfs.img` | 24,760,336 | `9757bdd6a70eae21092ae905d7f558e077dce1685fe9cc5a69bcd42519da9297` |
+| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `9480714b3b464f1ba4c68a0a4e5c956e91fbf445c69033c55b0d683707550c47` |
 
 This build produced:
 
@@ -253,13 +253,13 @@ This build produced:
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `b5f03fe9b27481d19f4205b2c64d4fe70b52db184664d8a002f6d9b6bad6eadb`
+  `19a5c9cf870e77547925007451a5b5f79fede86da36b4c30eabe74d49630c2d4`
 - `shim/e1s-xnu/out/Image`:
   `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`
 - `e1s-boot-touch.img`:
-  `2f9e552ef6669e9cdb6614fca2bffebbc17e2719b35dcfab03f2a8896eb33ca8`
+  `890edd7e9d8718e3c751af4d1320742921770e1f064415574c767bd96418609b`
 - `e1s-boot-touch.img.tar`:
-  `98bd15be4931fca4e095654caf1a7e47017c0e162578369771aabc4900ec4763`
+  `f0d0da4a29bdf1974cc69aeaab9f53fc26aeb58fbbe40cf04a61f6dab3925e88`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`

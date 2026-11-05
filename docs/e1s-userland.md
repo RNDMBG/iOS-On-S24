@@ -101,8 +101,8 @@ same delta as the payload copy.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,760,336 | `1054edbb0eb00408c30d3aea290a15a612c0481542fc411fc0c28e4e93e5c10d` |
-| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `18e1d84472cd7122b9e62eecb5ff2648487807151db6aaa0fd541a1afb1a5ab0` |
+| `out/e1s-boot-apfs.img` | 24,760,336 | `9757bdd6a70eae21092ae905d7f558e077dce1685fe9cc5a69bcd42519da9297` |
+| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `9480714b3b464f1ba4c68a0a4e5c956e91fbf445c69033c55b0d683707550c47` |
 | APFS root `ROOT` | 4,194,304 | `e337830c018c2999fb3a9ae0c532830b3bf071564b4e6e934e65a7a2b959adcb` |
 | APFS volume `MD1` | 4,194,304 | `45ebf1c2fcae332c19b794b45a6ee08e2154c08c9237f5442ef165ce9269bd9d` |
 | `/sbin/launchd` Mach-O | 16,635 | `19a0b19a42a6c691dd6e3fe31144907570e0d2072f5d94aa6126d12526664e74` |

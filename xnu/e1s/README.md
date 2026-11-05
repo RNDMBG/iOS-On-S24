@@ -23,6 +23,34 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0014-e1s-early-log.patch` | builds, untested | installs the `0x91300000` console ring in `kernel_bootstrap` (after `vm_mem_bootstrap`), not in `bsd_init`, so early panics are recorded |
 | `0015-e1s-video-console.patch` | builds, untested | clears the loader framebuffer once at the first graphics-mode console init, so the XNU banner starts on a black screen instead of under the loader UI |
 | `0016-e1s-console-scale.patch` | builds; 2x path checked in the QEMU boot | `conscale` multiplies the 8x16 font; E1S defaults to 2x (16x32 cells, 70x64 characters on the phone panel) |
+| `0017-e1s-uart.patch` | builds, untested | polled console on the USI debug UART (`0x10840000`), using the 115200 8N1 frame S-Boot leaves; `e1suart=0` disables |
+| `0018-e1s-psci-power.patch` | builds, untested | `PE_halt_restart` through PSCI `SYSTEM_OFF` / `SYSTEM_RESET`, installed even when one CPU is listed; `reboot` and shutdown now reach the firmware |
+| `0019-e1s-wdt.patch` | builds, untested | stops WDT0 (`0x10040000`) and WDT1 (`0x10050000`) if S-Boot left them enabled; `e1swdt=0` skips |
+
+### UART, power and watchdog (0017-0019)
+
+`0017-e1s-uart.patch` registers the S5E9945 USI debug UART as a polled serial
+console. S-Boot prints its own log there, so the kernel reuses the block at
+`0x10840000` without rewriting the divider: `e1s_uart_init()` reads `ULCON`
+and `UCON`, sets 8 data bits only if the frame is not already 8 bits, and
+changes the TX mode to CPU polling without touching the clock-select bits.
+`e1suart=0` keeps it off. The pads are `gpg0-1` (RX) and `gpg0-2` (TX), pin
+function 3; whether the debug UART is reachable on a retail SM-S921B is not
+known.
+
+`0018-e1s-psci-power.patch` gives the platform expert a `PE_halt_restart`
+hook. `SYSTEM_OFF` (PSCI 0.2, `0x84000008`) powers down and `SYSTEM_RESET`
+(`0x84000009`) restarts, over the same conduit as `CPU_ON`: the ADT's
+`/chosen/psci-method` is `smc`. It is installed by `psci_smp_init()`, which
+now runs even when only one CPU is in the list, so a single-core bring-up can
+still shut down and restart.
+
+`0019-e1s-wdt.patch` stops the two Exynos watchdogs if S-Boot left them
+counting. `WDT0` (`0x10040000`) and `WDT1` (`0x10050000`) are disabled at
+their `WTCON` enable and interrupt bits, and `WTCLRINT` is written, from
+`kernel_bootstrap` after `vm_mem_bootstrap()`. `e1swdt=0` leaves them alone.
+The read is what a watchdog driver would do at probe; if S-Boot has gated the
+block, the access is the open risk.
 
 ### Console scale (0016)
 

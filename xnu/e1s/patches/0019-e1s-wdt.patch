@@ -1,0 +1,94 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -118,6 +118,7 @@
+ bsd/dev/e1s_pmic.c		standard
+ bsd/dev/e1s_touch.c		standard
+ bsd/dev/e1s_ufs.c		standard
++bsd/dev/e1s_wdt.c		standard
+ bsd/dev/redwood_input.c		standard
+ bsd/dev/redwood_virtio_input.c	standard
+ bsd/dev/redwood_goodix.c	standard
+diff --git a/bsd/dev/e1s_wdt.c b/bsd/dev/e1s_wdt.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/e1s_wdt.c
+@@ -0,0 +1,64 @@
++/*
++ * The two Exynos watchdogs, which S-Boot may leave counting.  XNU has no
++ * driver for them and nothing to pet them with, so a long boot would be cut
++ * short by a reset.  Stop WDT0 and WDT1 if either is enabled; e1swdt=0
++ * leaves them as the boot loader left them.
++ */
++
++#if defined(ARM64_BOARD_CONFIG_E1S)
++
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++#include <sys/types.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define E1S_WDT0_PA             0x10040000UL
++#define E1S_WDT1_PA             0x10050000UL
++#define E1S_WDT_SIZE            0x100
++
++#define E1S_WDT_WTCON           0x00
++#define E1S_WDT_WTCLRINT        0x0c
++
++#define E1S_WDT_WTCON_ENABLE    (1U << 5)
++#define E1S_WDT_WTCON_INTEN     (1U << 2)
++
++static void
++e1s_wdt_stop(vm_offset_t pa, const char *name)
++{
++	volatile uint32_t *wdt;
++	uint32_t con;
++
++	wdt = (volatile uint32_t *)ml_io_map(pa, E1S_WDT_SIZE);
++	if (wdt == NULL) {
++		printf("e1s-wdt: cannot map %s at %#lx\n", name, (unsigned long)pa);
++		return;
++	}
++
++	con = wdt[E1S_WDT_WTCON / 4];
++	if ((con & (E1S_WDT_WTCON_ENABLE | E1S_WDT_WTCON_INTEN)) == 0) {
++		printf("e1s-wdt: %s was off (WTCON %#x)\n", name, con);
++		return;
++	}
++
++	wdt[E1S_WDT_WTCON / 4] = con & ~(E1S_WDT_WTCON_ENABLE | E1S_WDT_WTCON_INTEN);
++	wdt[E1S_WDT_WTCLRINT / 4] = 1;
++	printf("e1s-wdt: stopped %s (WTCON %#x)\n", name, con);
++}
++
++void
++e1s_wdt_init(void)
++{
++	uint32_t on = 1;
++
++	if (PE_parse_boot_argn("e1swdt", &on, sizeof(on)) && on == 0) {
++		printf("e1s-wdt: left running (e1swdt=0)\n");
++		return;
++	}
++
++	e1s_wdt_stop(E1S_WDT0_PA, "WDT0");
++	e1s_wdt_stop(E1S_WDT1_PA, "WDT1");
++}
++
++#endif /* ARM64_BOARD_CONFIG_E1S */
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -436,7 +436,10 @@
+ #if defined(ARM64_BOARD_CONFIG_E1S)
+ 	/* the console ring has to be up before the first panic can happen */
+ 	extern void e1s_log_init(void);
++	extern void e1s_wdt_init(void);
+ 	e1s_log_init();
++	/* S-Boot may have armed the watchdogs and XNU has nothing to pet them */
++	e1s_wdt_init();
+ #endif
+ 
+ 	machine_info.memory_size = (uint32_t)mem_size;

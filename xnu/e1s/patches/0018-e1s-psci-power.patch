@@ -1,0 +1,78 @@
+diff --git a/osfmk/arm64/psci_smp.c b/osfmk/arm64/psci_smp.c
+--- a/osfmk/arm64/psci_smp.c
++++ b/osfmk/arm64/psci_smp.c
+@@ -43,6 +43,7 @@
+ #include <arm/machine_routines.h>
+ #include <arm64/proc_reg.h>
+ #include <arm64/psci_smp.h>
++#include <IOKit/IOPlatformExpert.h>
+ #include <pexpert/pexpert.h>
+ #include <pexpert/device_tree.h>
+ #include <pexpert/arm64/board_config.h>
+@@ -54,6 +55,8 @@
+ #define PSCI_CPU_ON             0xC4000003u
+ #define PSCI_AFFINITY_INFO      0xC4000004u
+ #define PSCI_AFFINITY_OFF       1
++#define PSCI_SYSTEM_OFF         0x84000008u
++#define PSCI_SYSTEM_RESET       0x84000009u
+ 
+ #define PSCI_SMP_START_SECONDS  5       /* how long a started core is waited for */
+ #define PSCI_SMP_STOP_SECONDS   3       /* ... and the cores that were told to stop */
+@@ -112,6 +115,30 @@
+ 	return (status <= 0 && status > -(int64_t)(sizeof(names) / sizeof(names[0]))) ? names[-status] : "?";
+ }
+ 
++/*
++ * The platform expert's halt and restart hook.  SYSTEM_OFF powers the phone
++ * down, SYSTEM_RESET restarts it; both use the conduit /chosen names, the
++ * same one CPU_ON uses.
++ */
++static int
++psci_smp_halt_restart(unsigned int type)
++{
++	uint32_t function;
++
++	switch (type) {
++	case kPERestartCPU:
++	case kPEPanicRestartCPU:
++		function = PSCI_SYSTEM_RESET;
++		break;
++	default:
++		function = PSCI_SYSTEM_OFF;
++		break;
++	}
++
++	psci_call(function, 0, 0, 0);
++	return -1;              /* the firmware returned instead of resetting */
++}
++
+ void
+ psci_smp_init(void)
+ {
+@@ -124,6 +151,8 @@
+ 	    size >= 3 && strncmp((const char *)prop, "hvc", 3) == 0) {
+ 		psci_smp_hvc = 1;
+ 	}
++
++	PE_halt_restart = psci_smp_halt_restart;
+ }
+ 
+ /* A processor other than the boot processor says how far it has come. */
+diff --git a/iokit/Kernel/GenericARMPE.cpp b/iokit/Kernel/GenericARMPE.cpp
+--- a/iokit/Kernel/GenericARMPE.cpp
++++ b/iokit/Kernel/GenericARMPE.cpp
+@@ -252,9 +252,11 @@
+ 	if (cpus[master_cpu] != NULL) {
+ 		/* Unblocks everything that waits for the CPU count to be known. */
+ 		ml_set_max_cpus(count);
+-		if (count > 1) {
+-			psci_smp_init();
+-		}
++		/*
++		 * Also when only one core is listed: this reads /chosen/psci-method
++		 * and installs PE_halt_restart, which reboot and shutdown need.
++		 */
++		psci_smp_init();
+ 		/*
+ 		 * The slower cores (an L2 access penalty, the loader's "small-core") are started 28 seconds
+ 		 * later (boot-arg small_cores_after=S; 0: at once). With all seven from the start the lock

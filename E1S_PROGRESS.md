@@ -1327,3 +1327,38 @@ for iOS 16.0; `/sbin/launchd` is 16,635 bytes, sha256
 `19a0b19a42a6c691...`. All four images pass `verify_boot.py`, and the APFS
 one also passes the `verify.py content` reader. Nothing was flashed and there
 is no phone photo or `0x91200000` dump.
+
+## 2026-11-05 - e1s UART, PSCI power and watchdogs (0017-0019)
+
+Three patches add what the phone needs to survive a boot and report one:
+
+- `0017-e1s-uart.patch` registers the S5E9945 USI debug UART at
+  `0x10840000` as a polled console. S-Boot leaves it at 115200 8N1; the
+  driver reuses the frame and divider, switches TX to CPU polling and
+  keeps the clock-select bits. Pads `gpg0-1`/`gpg0-2`, function 3.
+  `e1suart=0` disables it.
+- `0018-e1s-psci-power.patch` installs `PE_halt_restart`, so `shutdown`
+  sends PSCI `SYSTEM_OFF` (`0x84000008`) and `reboot` sends
+  `SYSTEM_RESET` (`0x84000009`) over the ADT's `psci-method = "smc"`.
+  `psci_smp_init()` now runs even with one CPU listed, which is the
+  default bring-up command line.
+- `0019-e1s-wdt.patch` stops WDT0 (`0x10040000`) and WDT1
+  (`0x10050000`) from `kernel_bootstrap` if S-Boot left them counting.
+  `e1swdt=0` leaves them alone.
+
+The E1S kernel builds (16,228,672 bytes, sha256 `19a5c9cf870e7754...`)
+and stops only at the known `check_all_exports` pass; the BCM2837 build
+of the same tree compiles the shared `GenericARMPE` change as well. None
+of the three has run on the phone; in particular, whether S-Boot gates
+the WDT block before the handoff is unknown, and the debug UART may not
+be reachable on a retail board.
+
+The four images were rebuilt from that kernel and all pass
+`verify_boot.py`:
+
+- `out/e1s-boot-touch.img` 16,371,728 bytes, sha256 `890edd7e9d8718e3...`
+- `out/e1s-boot-smp.img` 16,379,920, `f3cb5ca971039364...`
+- `out/e1s-boot-md0.img` 16,388,112, `55a6a7abd0d863f1...`
+- `out/e1s-boot-apfs.img` 24,760,336, `9757bdd6a70eae21...`
+
+No image was flashed, and there is no phone photo or `0x91200000` dump.

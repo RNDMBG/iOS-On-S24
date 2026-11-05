@@ -543,3 +543,25 @@ reserved-memory node uses 2 address cells and 1 size cell, so each `reg` is
 The old `0x880000000` XNU window is inside `cp_rmem`; do not use it.
 The loader picks a free gap from the live DTB and falls back to
 `0xA0000000`/512 MiB only when the DTB has no `/memory` node.
+
+## 14. Debug UART and watchdogs
+
+From `s5e9945-usi.dtsi` and `s5e9945.dts`:
+
+| Block | Address | Notes |
+| --- | --- | --- |
+| USI_PERIC0 debug UART (`serial_0`) | `0x10840000`, 256 B | `samsung,exynos-uart`, `samsung,usi-serial-v2`, 8N1 at 115200, 200 MHz source; pins `gpg0-1` RX / `gpg0-2` TX, function 3 |
+| WDT0 (little cluster) | `0x10040000`, 256 B | `samsung,s5e9945-v1-wdt`, GIC SPI `INTREQ__WDT0`, `timeout-sec = 80` |
+| WDT1 (big cluster) | `0x10050000`, 256 B | `samsung,s5e9945-v2-wdt`, GIC SPI `INTREQ__WDT1` |
+
+S-Boot prints its log on the debug UART, so `0017` reuses that
+configuration instead of programming a divider. It reads `UCON` and
+changes only the TX mode to CPU polling, leaving the clock-select bits
+alone, and writes `ULCON` only if the frame is not already 8 data bits.
+`e1suart=0` keeps the console off. Whether the debug UART is brought out
+on a retail SM-S921B is not known.
+
+`0019` stops both watchdogs when `WTCON` shows them enabled; `e1swdt=0`
+leaves them as S-Boot left them. Stopping them needs the WDT clock to be
+on, which it must be if the timer is counting; if S-Boot gates the block,
+the register read is the open risk.
