@@ -20,6 +20,7 @@ import hashlib, struct, sys
 
 MH_MAGIC_64, CPU_TYPE_ARM64, MH_EXECUTE, MH_NOUNDEFS = 0xfeedfacf, 0x0100000c, 2, 1
 LC_SEGMENT_64, LC_SYMTAB, LC_UNIXTHREAD, LC_CODE_SIGNATURE = 0x19, 0x2, 0x5, 0x1d
+LC_BUILD_VERSION = 0x32
 ARM_THREAD_STATE64, ARM_THREAD_STATE64_COUNT = 6, 68
 VM_PROT_R, VM_PROT_X = 1, 4
 S_ATTR_CODE = 0x80000400		# PURE_INSTRUCTIONS | SOME_INSTRUCTIONS
@@ -113,6 +114,8 @@ def build(obj, entitlements=None):
         segment('__TEXT', BASE, SEG, 0, SEG, VM_PROT_R | VM_PROT_X, [sect]),
         segment('__LINKEDIT', BASE + SEG, SEG, SEG, sig_size, VM_PROT_R),
         thread,
+        # iOS 16.0 platform; without it exec returns ENOEXEC.
+        struct.pack('<6I', LC_BUILD_VERSION, 24, 2, 0x00100000, 0, 0),
         struct.pack('<4I', LC_CODE_SIGNATURE, 16, SEG, sig_size),
     ]
     lc = b''.join(cmds)

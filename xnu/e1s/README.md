@@ -22,6 +22,21 @@ top of the pinned HackiOS base in `xnu/hackios/`; they do not use the older
 | `0013-e1s-rootauth.patch` | builds, untested | APFS answers `FSIOC_KERNEL_ROOTAUTH` for the mounted root on E1S builds, so a locally built APFS root can pass `bsd_init` with `rd=ufsroot0` |
 | `0014-e1s-early-log.patch` | builds, untested | installs the `0x91300000` console ring in `kernel_bootstrap` (after `vm_mem_bootstrap`), not in `bsd_init`, so early panics are recorded |
 | `0015-e1s-video-console.patch` | builds, untested | clears the loader framebuffer once at the first graphics-mode console init, so the XNU banner starts on a black screen instead of under the loader UI |
+| `0016-e1s-console-scale.patch` | builds; 2x path checked in the QEMU boot | `conscale` multiplies the 8x16 font; E1S defaults to 2x (16x32 cells, 70x64 characters on the phone panel) |
+
+### Console scale (0016)
+
+`0016-e1s-console-scale.patch` makes the video console cell size a boot
+argument. `conscale=N` multiplies the 8x16 `iso_font`; `vc_render_char` writes
+each font pixel as an N x N block, and the row stepping, cursor, clear and
+scroll paths use the resulting cell size instead of the font size. E1S builds
+default to 2 (70 columns x 64 rows on the 1080x2340 panel); `conscale=1`
+restores the 140x128 text, and other machines still default to 1.
+
+The 2x path was checked on the QEMU boot, with a BCM2837 build of the same
+tree and `conscale=2`: the log fills the panel, wraps at 70 columns and
+scrolls cleanly, while `conscale=1` produced the previous screen. It has not
+run on the phone.
 
 ### Touch (0003)
 

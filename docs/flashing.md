@@ -181,7 +181,7 @@ seconds before the jump; the loader removes that token before it passes the
 command line to XNU. Remove it for a normal boot. The screen uses the S-Boot
 framebuffer (or the DTB base if one is supplied), not QEMU.
 
-The BOOT partition is 67,108,864 bytes. This image is 16,388,112 bytes; it is
+The BOOT partition is 67,108,864 bytes. This image is 16,371,728 bytes; it is
 not padded to the partition size. S-Boot reads the v4 header's `kernel_size`,
 so a smaller image is valid. The image is a new loader plus the XNU payload,
 not a byte-patched copy of the stock `boot.img`.
@@ -239,27 +239,27 @@ userland.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `652bb56f85955081241dc126e83160c32a0c4b41958e16135ac9118fee36f59d` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `01f19b2a1eccc57fb424c0768d8118ca41e314918ec9f3e23defc846518f3002` |
+| `out/e1s-boot-apfs.img` | 24,760,336 | `1054edbb0eb00408c30d3aea290a15a612c0481542fc411fc0c28e4e93e5c10d` |
+| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `18e1d84472cd7122b9e62eecb5ff2648487807151db6aaa0fd541a1afb1a5ab0` |
 
 This build produced:
 
 | File | Size |
 | --- | ---: |
 | `shim/e1s-xnu/out/Image` | 118,784 bytes |
-| `out/e1s-boot-touch.img` | 16,388,112 bytes |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 bytes |
+| `out/e1s-boot-touch.img` | 16,371,728 bytes |
+| `out/e1s-boot-touch.img.tar` | 16,373,760 bytes |
 
 This build's SHA-256 values:
 
 - `mach.development.e1s`:
-  `c0a3eb09872ecc480a77df6e6170565272f3db9d2591d2c7d0883efc445bb95d`
+  `b5f03fe9b27481d19f4205b2c64d4fe70b52db184664d8a002f6d9b6bad6eadb`
 - `shim/e1s-xnu/out/Image`:
   `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`
 - `e1s-boot-touch.img`:
-  `cdd1ce68f8bcbdc9359c0a5830447550f5477a0cfaeca69d5e101d8b2fba3034`
+  `2f9e552ef6669e9cdb6614fca2bffebbc17e2719b35dcfab03f2a8896eb33ca8`
 - `e1s-boot-touch.img.tar`:
-  `34df24ea5a5c8655d39080ba75bad0276292f6228ca4b026b82ab3dda42f1d03`
+  `98bd15be4931fca4e095654caf1a7e47017c0e162578369771aabc4900ec4763`
 
 The kernel payload at `0x1d000` now includes `0003` (touch EINT on GIC SPI 42,
 with polling fallback), `0007` (ACPM/PMIC), `0008` (MAX77775 battery), `0009`

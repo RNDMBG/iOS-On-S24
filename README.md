@@ -250,11 +250,13 @@ a load progress bar, the boot-stage checklist, and a colour bar. The
 `e1s.hold=5` test token keeps the finished screen up for five seconds; the
 loader removes it before passing the command line to XNU.
 
-The current image is 16,388,112 bytes against the 64 MiB BOOT partition. It is
+The current image is 16,371,728 bytes against the 64 MiB BOOT partition. It is
 not padded to the partition: S-Boot uses the v4 header's `kernel_size`. This
 build adds the `gpa1-2` touch EINT on GIC SPI 42 with polling fallback, and the
 loader now rebases the ADT `RAMDisk` pointer when it copies the payload to a
-DTB-selected window. It also publishes `E1SMARK1` at `0x912ff000`; XNU writes
+DTB-selected window. The XNU console defaults to 2x text (`0016`), 70x64
+characters on the 1080x2340 panel; `conscale=1` restores the old 140x128.
+It also publishes `E1SMARK1` at `0x912ff000`; XNU writes
 1-4 there at the checkpoints before the MMU is enabled, so a dump still shows
 how far a failed boot got. The flash procedure is in
 [docs/flashing.md](docs/flashing.md).
@@ -262,10 +264,10 @@ how far a failed boot got. The flash procedure is in
 | File | Size | SHA-256 |
 | --- | ---: | --- |
 | `shim/e1s-xnu/out/Image` | 118,784 | `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b` |
-| `out/e1s-boot-touch.img` | 16,388,112 | `f5675c19cd2b2268127e32a1eb4fca8cd9d7be3d01edd63d7a022781fdbce467` |
-| `out/e1s-boot-touch.img.tar` | 16,394,240 | `bcd456aee8c358132fd0e0b7ba3a481ba72b0b407a31f5f13d2de32e06157e81` |
-| `out/e1s-boot-smp.img` | 16,396,304 | `c6a467c193761183c4e094ea52f912a45ff32d4be973ab9067dc2af7f3dbd830` |
-| `out/e1s-boot-smp.img.tar` | 16,404,480 | `aa7bc977b140354250b980b6dd72cafddd3be6ccf21f6de885ac722c705c8525` |
+| `out/e1s-boot-touch.img` | 16,371,728 | `2f9e552ef6669e9cdb6614fca2bffebbc17e2719b35dcfab03f2a8896eb33ca8` |
+| `out/e1s-boot-touch.img.tar` | 16,373,760 | `98bd15be4931fca4e095654caf1a7e47017c0e162578369771aabc4900ec4763` |
+| `out/e1s-boot-smp.img` | 16,379,920 | `c1571cc75f6cb371b48147984b6c37c80b63abd5fcb699d36d2bc37ccefc4bf2` |
+| `out/e1s-boot-smp.img.tar` | 16,384,000 | `aa8ef30528267a1fa7d6d50a6199ba7f900a39b684d60875d094c9e98ed79752` |
 
 The diagnostic images boot one static Mach-O as PID 1. `out/e1s-boot-md0.img`
 appends the raw Mach-O as the `md0` RAMDisk and lets `mockfs` resolve
@@ -279,10 +281,10 @@ the host. Neither is an iOS rootfs, and neither has run on the phone. See
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-md0.img` | 16,404,496 | `7d7c1cd207ea814429c3c411a3de55a5cd8490eef66c68454078710660dd006d` |
-| `out/e1s-boot-md0.img.tar` | 16,414,720 | `0d30421bad915198a475cbf861ec7396f1c123dfa682613c3ccb2c898f0ea098` |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
+| `out/e1s-boot-md0.img` | 16,388,112 | `44295e7d669491cab999508a104d5fa86b1f870d05f1ba95afeebf9637ae0716` |
+| `out/e1s-boot-md0.img.tar` | 16,394,240 | `088869d0f9cd8c96c6a6dff5fbac32ed7994f6e183f296fade1ba9564f5d2686` |
+| `out/e1s-boot-apfs.img` | 24,760,336 | `1054edbb0eb00408c30d3aea290a15a612c0481542fc411fc0c28e4e93e5c10d` |
+| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `18e1d84472cd7122b9e62eecb5ff2648487807151db6aaa0fd541a1afb1a5ab0` |
 
 ### Stock-kernel boot screen and menu
 

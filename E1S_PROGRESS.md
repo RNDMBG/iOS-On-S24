@@ -1299,3 +1299,31 @@ the PPM was sheared. `tools/e1s/ppm2png.py` now drops the pad byte, and the
 encoder reads the padded stride directly. Recorded with
 `tools/e1s/_qemu_record.py` (30 fps timestamps) and encoded with
 `tools/e1s/_qemu_encode.py 270 1240`.
+
+## 2026-11-05 - scaled console for the e1s panel (0016)
+
+`0016-e1s-console-scale.patch` makes the video console's cell size a boot
+argument instead of the fixed 8x16 font. `conscale=N` multiplies each font
+pixel by N; `vc_render_char()` writes N x N blocks and the paint, cursor,
+clear and scroll paths step by the resulting cell. E1S builds default to 2x
+(70x64 characters on the 1080x2340 panel); `conscale=1` restores 140x128, and
+other machines default to 1.
+
+The 2x path was checked in the QEMU boot with a BCM2837 build of the same
+tree: `conscale=2` renders, wraps and scrolls the real log at 70 columns, and
+`conscale=1` produced the previous screen. The E1S kernel builds (16,228,160
+bytes, sha256 `b5f03fe9b27481d1...`) and stops only at the known
+`check_all_exports` pass. It has not run on the phone.
+
+The four boot images were rebuilt from that kernel:
+
+- `out/e1s-boot-touch.img` 16,371,728 bytes, sha256 `2f9e552ef6669e9c...`
+- `out/e1s-boot-smp.img` 16,379,920, `c1571cc75f6cb371...`
+- `out/e1s-boot-md0.img` 16,388,112, `44295e7d669491ca...`
+- `out/e1s-boot-apfs.img` 24,760,336, `1054edbb0eb00408...`
+
+The APFS image changed because `mkinit.py` now writes an `LC_BUILD_VERSION`
+for iOS 16.0; `/sbin/launchd` is 16,635 bytes, sha256
+`19a0b19a42a6c691...`. All four images pass `verify_boot.py`, and the APFS
+one also passes the `verify.py content` reader. Nothing was flashed and there
+is no phone photo or `0x91200000` dump.

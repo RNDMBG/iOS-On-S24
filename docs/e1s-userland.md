@@ -101,11 +101,11 @@ same delta as the payload copy.
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `out/e1s-boot-apfs.img` | 24,776,720 | `902a651cdfa63af12893b9875bc25655a079c9f608862c5c3bac5f3bc44f02fb` |
-| `out/e1s-boot-apfs.img.tar` | 24,780,800 | `765a247a6f6f57fe6731d407332264e25fcbc1a8577f1f398592bfe16a01d887` |
-| APFS root `ROOT` | 4,194,304 | `dc29c22ff7a26630002655d932cef0d75a846bfb52479d70e99d0e976fd9074c` |
+| `out/e1s-boot-apfs.img` | 24,760,336 | `1054edbb0eb00408c30d3aea290a15a612c0481542fc411fc0c28e4e93e5c10d` |
+| `out/e1s-boot-apfs.img.tar` | 24,770,560 | `18e1d84472cd7122b9e62eecb5ff2648487807151db6aaa0fd541a1afb1a5ab0` |
+| APFS root `ROOT` | 4,194,304 | `e337830c018c2999fb3a9ae0c532830b3bf071564b4e6e934e65a7a2b959adcb` |
 | APFS volume `MD1` | 4,194,304 | `45ebf1c2fcae332c19b794b45a6ee08e2154c08c9237f5442ef165ce9269bd9d` |
-| `/sbin/launchd` Mach-O | 16,635 | `93041871cea969e53211ffede941a7ca31bc666cf20faffd1d47dde6a84f0104` |
+| `/sbin/launchd` Mach-O | 16,635 | `19a0b19a42a6c691dd6e3fe31144907570e0d2072f5d94aa6126d12526664e74` |
 
 Both containers pass the imported reader (`verify.py content`, all block
 checksums and files) and `apfsck -cw` from linux-apfs/apfsprogs at `1bd1c1c`.

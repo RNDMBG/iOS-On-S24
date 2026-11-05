@@ -1,0 +1,306 @@
+diff --git a/osfmk/console/video_console.c b/osfmk/console/video_console.c
+--- a/osfmk/console/video_console.c
++++ b/osfmk/console/video_console.c
+@@ -1291,7 +1291,15 @@
+ static int vc_rendered_char_size = 0;
+ 
+ #define REN_MAX_DEPTH   32
+-static unsigned char vc_rendered_char[ISO_CHAR_HEIGHT * ((REN_MAX_DEPTH / 8) * ISO_CHAR_WIDTH)];
++
++/* "conscale" multiplies the 8x16 font: E1S reads its 1080x2340 panel at 2x. */
++#define VC_MAX_TEXT_SCALE 2
++static unsigned int vc_text_scale = 1;
++static unsigned int vc_cell_w = ISO_CHAR_WIDTH;
++static unsigned int vc_cell_h = ISO_CHAR_HEIGHT;
++
++static unsigned char vc_rendered_char[ISO_CHAR_HEIGHT * VC_MAX_TEXT_SCALE *
++    ((REN_MAX_DEPTH / 8) * ISO_CHAR_WIDTH * VC_MAX_TEXT_SCALE)];
+ 
+ #if defined(XNU_TARGET_OS_OSX)
+ #define CONFIG_VC_PROGRESS_METER_SUPPORT        1
+@@ -1336,7 +1344,7 @@
+ 		return;
+ 	}
+ 
+-	linelongs = vinfo.v_rowbytes * (ISO_CHAR_HEIGHT >> 2);
++	linelongs = vinfo.v_rowbytes * (vc_cell_h >> 2);
+ 	rowline = vinfo.v_rowscanbytes >> 2;
+ 	rowlongs = vinfo.v_rowbytes >> 2;
+ 
+@@ -1390,23 +1398,34 @@
+ 	theChar = iso_font + (ch * ISO_CHAR_HEIGHT);
+ 
+ 	for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
+-		unsigned char mask = 1;
+-		do {
+-			switch (newdepth) {
+-			case 8:
+-				*current.charptr++ = (*theChar & mask) ? 0xFF : 0;
+-				break;
+-			case 16:
+-				*current.shortptr++ = (*theChar & mask) ? 0xFFFF : 0;
+-				break;
++		unsigned int sy;
+ 
+-			case 30:
+-			case 32:
+-				*current.longptr++ = (*theChar & mask) ? 0xFFFFFFFF : 0;
+-				break;
++		for (sy = 0; sy < vc_text_scale; sy++) {
++			unsigned char mask = 1;
++			unsigned int col;
++
++			for (col = 0; col < ISO_CHAR_WIDTH; col++) {
++				int on = (*theChar & mask) != 0;
++				unsigned int sx;
++
++				for (sx = 0; sx < vc_text_scale; sx++) {
++					switch (newdepth) {
++					case 8:
++						*current.charptr++ = on ? 0xFF : 0;
++						break;
++					case 16:
++						*current.shortptr++ = on ? 0xFFFF : 0;
++						break;
++
++					case 30:
++					case 32:
++						*current.longptr++ = on ? 0xFFFFFFFF : 0;
++						break;
++					}
++				}
++				mask <<= 1;
+ 			}
+-			mask <<= 1;
+-		} while (mask); /* while the single bit drops to the right */
++		}
+ 		theChar++;
+ 	}
+ }
+@@ -1426,14 +1445,14 @@
+ 		theChar = (uint32_t*)(vc_rendered_char);
+ 	}
+ 	where = (uint32_t*)(vinfo.v_baseaddr +
+-	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
+-	    (xx * ISO_CHAR_WIDTH));
++	    (yy * vc_cell_h * vinfo.v_rowbytes) +
++	    (xx * vc_cell_w));
+ 
+ 	if (!attrs) {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) {         /* No attr? FLY !*/
++		for (i = 0; i < (int)vc_cell_h; i++) {         /* No attr? FLY !*/
+ 			uint32_t *store = where;
+ 			int x;
+-			for (x = 0; x < 2; x++) {
++			for (x = 0; x < (int)(vc_cell_w / 4); x++) {
+ 				uint32_t val = *theChar++;
+ 				val = (vc_color_back & ~val) | (vc_color_fore & val);
+ 				*store++ = val;
+@@ -1442,10 +1461,10 @@
+ 			where = (uint32_t*)(((unsigned char*)where) + vinfo.v_rowbytes);
+ 		}
+ 	} else {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) { /* a little slower */
++		for (i = 0; i < (int)vc_cell_h; i++) { /* a little slower */
+ 			uint32_t *store = where, lastpixel = 0;
+ 			int x;
+-			for (x = 0; x < 2; x++) {
++			for (x = 0; x < (int)(vc_cell_w / 4); x++) {
+ 				uint32_t val = *theChar++, save = val;
+ 				if (attrs & ATTR_BOLD) { /* bold support */
+ 					if (lastpixel && !(save & 0xFF000000)) {
+@@ -1464,7 +1483,7 @@
+ 				if (attrs & ATTR_REVERSE) {
+ 					val = ~val;
+ 				}
+-				if (attrs & ATTR_UNDER && i == ISO_CHAR_HEIGHT - 1) {
++				if (attrs & ATTR_UNDER && i == (int)vc_cell_h - 1) {
+ 					val = ~val;
+ 				}
+ 
+@@ -1494,14 +1513,14 @@
+ 		theChar = (uint32_t*)(vc_rendered_char);
+ 	}
+ 	where = (uint32_t*)(vinfo.v_baseaddr +
+-	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
+-	    (xx * ISO_CHAR_WIDTH * 2));
++	    (yy * vc_cell_h * vinfo.v_rowbytes) +
++	    (xx * vc_cell_w * 2));
+ 
+ 	if (!attrs) {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) {         /* No attrs ? FLY ! */
++		for (i = 0; i < (int)vc_cell_h; i++) {         /* No attrs ? FLY ! */
+ 			uint32_t *store = where;
+ 			int x;
+-			for (x = 0; x < 4; x++) {
++			for (x = 0; x < (int)(vc_cell_w / 2); x++) {
+ 				uint32_t val = *theChar++;
+ 				val = (vc_color_back & ~val) | (vc_color_fore & val);
+ 				*store++ = val;
+@@ -1510,10 +1529,10 @@
+ 			where = (uint32_t*)(((unsigned char*)where) + vinfo.v_rowbytes);
+ 		}
+ 	} else {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) { /* a little bit slower */
++		for (i = 0; i < (int)vc_cell_h; i++) { /* a little bit slower */
+ 			uint32_t *store = where, lastpixel = 0;
+ 			int x;
+-			for (x = 0; x < 4; x++) {
++			for (x = 0; x < (int)(vc_cell_w / 2); x++) {
+ 				uint32_t val = *theChar++, save = val;
+ 				if (attrs & ATTR_BOLD) { /* bold support */
+ 					if (save == 0xFFFF0000) {
+@@ -1525,7 +1544,7 @@
+ 				if (attrs & ATTR_REVERSE) {
+ 					val = ~val;
+ 				}
+-				if (attrs & ATTR_UNDER && i == ISO_CHAR_HEIGHT - 1) {
++				if (attrs & ATTR_UNDER && i == (int)vc_cell_h - 1) {
+ 					val = ~val;
+ 				}
+ 
+@@ -1564,14 +1583,14 @@
+ 		theCharPrevious = NULL;
+ 	}
+ 	where = (uint32_t*)(vinfo.v_baseaddr +
+-	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
+-	    (xx * ISO_CHAR_WIDTH * 4));
++	    (yy * vc_cell_h * vinfo.v_rowbytes) +
++	    (xx * vc_cell_w * 4));
+ 
+ 	if (!attrs) {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) {         /* No attrs ? FLY ! */
++		for (i = 0; i < (int)vc_cell_h; i++) {         /* No attrs ? FLY ! */
+ 			uint32_t *store = where;
+ 			int x;
+-			for (x = 0; x < 8; x++) {
++			for (x = 0; x < (int)vc_cell_w; x++) {
+ 				uint32_t val = *theChar++;
+ 				if (theCharPrevious == NULL || val != *theCharPrevious++) {
+ 					val = (vc_color_back & ~val) | (vc_color_fore & val);
+@@ -1584,10 +1603,10 @@
+ 			where = (uint32_t *)(((unsigned char*)where) + vinfo.v_rowbytes);
+ 		}
+ 	} else {
+-		for (i = 0; i < ISO_CHAR_HEIGHT; i++) { /* a little slower */
++		for (i = 0; i < (int)vc_cell_h; i++) { /* a little slower */
+ 			uint32_t *store = where, lastpixel = 0;
+ 			int x;
+-			for (x = 0; x < 8; x++) {
++			for (x = 0; x < (int)vc_cell_w; x++) {
+ 				uint32_t val = *theChar++, save = val;
+ 				if (attrs & ATTR_BOLD) { /* bold support */
+ 					if (lastpixel && !save) {
+@@ -1597,7 +1616,7 @@
+ 				if (attrs & ATTR_REVERSE) {
+ 					val = ~val;
+ 				}
+-				if (attrs & ATTR_UNDER && i == ISO_CHAR_HEIGHT - 1) {
++				if (attrs & ATTR_UNDER && i == (int)vc_cell_h - 1) {
+ 					val = ~val;
+ 				}
+ 
+@@ -1667,7 +1686,7 @@
+ 	kfree_data(rendered_font, rendered_font_size);
+ 
+ 	if (newdepth) {
+-		rendered_char_size = ISO_CHAR_HEIGHT * (((newdepth + 7) / 8) * ISO_CHAR_WIDTH);
++		rendered_char_size = vc_cell_h * (((newdepth + 7) / 8) * vc_cell_w);
+ 		rendered_font_size = (ISO_CHAR_MAX - ISO_CHAR_MIN + 1) * rendered_char_size;
+ 		rendered_font = kalloc_data(rendered_font_size, Z_WAITOK);
+ 	}
+@@ -1708,21 +1727,22 @@
+ 	}
+ 
+ 	where = (uint32_t*)(vinfo.v_baseaddr +
+-	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
+-	    (xx /** ISO_CHAR_WIDTH*/ * vinfo.v_depth));
+-	for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
++	    (yy * vc_cell_h * vinfo.v_rowbytes) +
++	    (xx * vc_cell_w * (vinfo.v_depth / 8)));
++	for (line = 0; line < (int)vc_cell_h; line++) {
+ 		switch (vinfo.v_depth) {
+ 		case 8:
+-			where[0] = ~where[0];
+-			where[1] = ~where[1];
++			for (col = 0; col < (int)(vc_cell_w / 4); col++) {
++				where[col] = ~where[col];
++			}
+ 			break;
+ 		case 16:
+-			for (col = 0; col < 4; col++) {
++			for (col = 0; col < (int)(vc_cell_w / 2); col++) {
+ 				where[col] = ~where[col];
+ 			}
+ 			break;
+ 		case 32:
+-			for (col = 0; col < 8; col++) {
++			for (col = 0; col < (int)vc_cell_w; col++) {
+ 				where[col] = ~where[col];
+ 			}
+ 			break;
+@@ -1740,7 +1760,7 @@
+ 		return;
+ 	}
+ 
+-	linelongs = vinfo.v_rowbytes * (ISO_CHAR_HEIGHT >> 2);
++	linelongs = vinfo.v_rowbytes * (vc_cell_h >> 2);
+ 	rowline = vinfo.v_rowbytes >> 2;
+ 	rowscanline = vinfo.v_rowscanbytes >> 2;
+ 
+@@ -1751,7 +1771,7 @@
+ 	i = (scrreg_bottom - scrreg_top) - num;
+ 
+ 	while (i-- > 0) {
+-		for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
++		for (line = 0; line < (int)vc_cell_h; line++) {
+ 			/*
+ 			 * Only copy what is displayed
+ 			 */
+@@ -1774,7 +1794,7 @@
+ 		return;
+ 	}
+ 
+-	linelongs = vinfo.v_rowbytes * (ISO_CHAR_HEIGHT >> 2);
++	linelongs = vinfo.v_rowbytes * (vc_cell_h >> 2);
+ 	rowline = vinfo.v_rowbytes >> 2;
+ 	rowscanline = vinfo.v_rowscanbytes >> 2;
+ 
+@@ -1784,7 +1804,7 @@
+ 	i = (scrreg_bottom - scrreg_top) - num;
+ 
+ 	while (i-- > 0) {
+-		for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
++		for (line = 0; line < (int)vc_cell_h; line++) {
+ 			/*
+ 			 * Only copy what is displayed
+ 			 */
+@@ -2777,8 +2797,26 @@
+ static void
+ vc_initialize(__unused struct vc_info * vinfo_p)
+ {
+-	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
+-	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
++	int scale = 0;
++
++	if (!PE_parse_boot_argn("conscale", &scale, sizeof(scale))) {
++#if defined(E1S)
++		scale = 2;
++#else
++		scale = 1;
++#endif
++	}
++	if (scale < 1) {
++		scale = 1;
++	} else if (scale > VC_MAX_TEXT_SCALE) {
++		scale = VC_MAX_TEXT_SCALE;
++	}
++	vc_text_scale = (unsigned int)scale;
++	vc_cell_w = ISO_CHAR_WIDTH * vc_text_scale;
++	vc_cell_h = ISO_CHAR_HEIGHT * vc_text_scale;
++
++	vinfo.v_rows = vinfo.v_height / vc_cell_h;
++	vinfo.v_columns = vinfo.v_width / vc_cell_w;
+ 	vinfo.v_rowscanbytes = ((vinfo.v_depth + 7) / 8) * vinfo.v_width;
+ 	vc_uiscale = vinfo.v_scale;
+ 	if (vc_uiscale > kMaxProgressData) {

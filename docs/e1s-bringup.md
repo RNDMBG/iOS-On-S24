@@ -436,7 +436,7 @@ from the `boot_args` command line. The colour bar is the framebuffer format
 test: a red/blue swap means the channel order is not XRGB8888.
 
 The image is not padded to the 64 MiB BOOT partition. The v4 header carries
-`kernel_size`; the current image is 16,388,112 bytes. It is a new loader plus
+`kernel_size`; the current image is 16,371,728 bytes. It is a new loader plus
 the XNU payload, not a patched copy of the stock `boot.img`. The current
 loader Image is 118,784 bytes, SHA-256
 `2094414378ee75acdf905b450149bc9f4b8f1da1257a5d72b7fcc0ef55d9366b`. It
